@@ -23,20 +23,19 @@ zcash_protocol = "=0.10.0"
 rand = "0.8"
 
 # Drives the *existing* Zebra verifiers through public APIs only — no upstream
-# source modifications (grant commitment). Plain upstream Zebra as a path
-# dependency on a sibling `../zebra` checkout pinned at the grant base commit
-# (135c1361914cf1759d63953e5175b36b195f0873, v6.2.0); the README and CI both
-# clone it there.
-zebra-chain = { path = "../zebra/zebra-chain" }
+# source modifications (grant commitment). Plain upstream Zebra, pinned by git
+# revision to the grant base commit (v6.2.0); cargo fetches and pins it
+# automatically, so a single clone builds directly — no local checkout needed.
+zebra-chain = { git = "https://github.com/ZcashFoundation/zebra.git", rev = "135c1361914cf1759d63953e5175b36b195f0873" }
 
 [dev-dependencies]
 # The baseline-agreement test (real pre-NU6.2 mainnet proofs) reads block
 # vectors from zebra-test::vectors::MAINNET_BLOCKS.
-zebra-test = { path = "../zebra/zebra-test" }
+zebra-test = { git = "https://github.com/ZcashFoundation/zebra.git", rev = "135c1361914cf1759d63953e5175b36b195f0873" }
 # Tests additionally need zebra-chain's `fake_v6_*` structural-transaction
 # helpers (`transaction::arbitrary`), which upstream gates behind this feature.
 # Dev-only: `cargo build` and the fuzz workspace never enable it.
-zebra-chain = { path = "../zebra/zebra-chain", features = ["proptest-impl"] }
+zebra-chain = { git = "https://github.com/ZcashFoundation/zebra.git", rev = "135c1361914cf1759d63953e5175b36b195f0873", features = ["proptest-impl"] }
 # The strategy-differential suite asserts which plonk::Error variant halo2's
 # SingleVerifier rejects with. Pinned to the exact version orchard resolves so
 # no second halo2_proofs instance enters the graph.

@@ -85,17 +85,17 @@ soundness, not just panic-freedom:
 
 ## Building & running
 
-This harness pins upstream Zebra as a path dependency at `../zebra` (plain
-upstream — drives it through public APIs only). Fetch it first:
+Upstream Zebra is a **git dependency pinned to the grant base revision**
+(v6.2.0, `135c1361914cf1759d63953e5175b36b195f0873`), so a single clone builds
+and runs directly — `cargo` fetches and pins Zebra itself, no separate checkout
+needed. A C compiler (`clang`) is required for the FFI in the dependency closure.
 
 ```bash
-git clone --filter=blob:none https://github.com/ZcashFoundation/zebra.git ../zebra
-git -C ../zebra checkout 135c1361914cf1759d63953e5175b36b195f0873    # Zebra v6.2.0 (grant base)
-
-# Unit + baseline + deep-invariant tests (real pre-NU6.2 proofs)
+# Unit + baseline + deep-invariant tests (real pre-NU6.2 proofs).
+# The first build fetches the pinned Zebra revision from GitHub.
 cargo test
 
-# Fuzz target
+# Fuzz target (nightly)
 cargo +nightly fuzz build orchard_batch_equivalence
 cargo +nightly fuzz run   orchard_batch_equivalence
 
