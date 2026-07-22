@@ -1,0 +1,43 @@
+[package]
+name = "zebra-batch-equivalence"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+description = "Differential batch<->single verification equivalence oracle for Zebra shielded proofs (ZCG #332 M1: Orchard)"
+repository = "https://github.com/robustfengbin/zebra-batch-equivalence"
+
+[lints.rust]
+# zebra-chain gates its `ZFuture` NetworkUpgrade variant behind this cfg; our
+# routing match mirrors it. Declare the cfg so the (inactive) arm is not a warning.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(zcash_unstable, values("zfuture"))'] }
+
+[dependencies]
+# Pinned byte-for-byte to what Zebra vendors so cargo unifies to a single
+# `orchard` / `zcash_protocol` instance — otherwise the `Bundle` type produced
+# by zebra-chain would not be the same type our BatchValidator consumes.
+orchard = "=0.15.0"
+zcash_protocol = "=0.10.0"
+# rand 0.8 is what orchard 0.15 and zebra-consensus use (rand_core 0.6.4);
+# StdRng gives us a deterministic, seedable ChaCha-based RNG.
+rand = "0.8"
+
+# Drives the *existing* Zebra verifiers through public APIs only — no upstream
+# source modifications (grant commitment). Plain upstream Zebra as a path
+# dependency on a sibling `../zebra` checkout pinned at the grant base commit
+# (135c1361914cf1759d63953e5175b36b195f0873, v6.2.0); the README and CI both
+# clone it there.
+zebra-chain = { path = "../zebra/zebra-chain" }
+
+[dev-dependencies]
+# The baseline-agreement test (real pre-NU6.2 mainnet proofs) reads block
+# vectors from zebra-test::vectors::MAINNET_BLOCKS.
+zebra-test = { path = "../zebra/zebra-test" }
+# Tests additionally need zebra-chain's `fake_v6_*` structural-transaction
+# helpers (`transaction::arbitrary`), which upstream gates behind this feature.
+# Dev-only: `cargo build` and the fuzz workspace never enable it.
+zebra-chain = { path = "../zebra/zebra-chain", features = ["proptest-impl"] }
+# The strategy-differential suite asserts which plonk::Error variant halo2's
+# SingleVerifier rejects with. Pinned to the exact version orchard resolves so
+# no second halo2_proofs instance enters the graph.
+halo2_proofs = "=0.3.2"

@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The Zebra commit this harness pins to (v6.2.0 release). The oracle
+  # drives Zebra's verifiers through public APIs only — no source changes — so
+  # this is plain upstream Zebra, fetched as the `../zebra` path dependency.
+  ZEBRA_REV: 135c1361914cf1759d63953e5175b36b195f0873
+
+jobs:
+  test:
+    name: Unit + baseline agreement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch pinned Zebra (path dependency)
+        run: |
+          git clone --filter=blob:none https://github.com/ZcashFoundation/zebra.git ../zebra
+          git -C ../zebra checkout "$ZEBRA_REV"
+
+      - name: Install build deps (clang for any FFI/bindgen in the closure)
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          # Matches `rust-version` in Cargo.toml (MSRV unchanged by the v6.2.0 re-baseline).
+          toolchain: "1.88"
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Unit tests (oracle classification) plus the baseline-agreement test:
+      # real pre-NU6.2 Orchard proofs must satisfy batch == single with zero
+      # spurious disagreements (grant AC2).
+      - name: cargo test
+        run: cargo test --all-targets --locked
+
+  fuzz:
+    name: Fuzz target build + smoke run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch pinned Zebra (path dependency)
+        run: |
+          git clone --filter=blob:none https://github.com/ZcashFoundation/zebra.git ../zebra
+          git -C ../zebra checkout "$ZEBRA_REV"
+
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # grant AC1: the harness builds and runs in CI. Build all four targets.
+      - name: Build all fuzz targets
+        run: cargo +nightly fuzz build
+
+      # cargo-fuzz has no --locked flag, so assert the build did not silently
+      # re-resolve either lockfile.
+      - name: Lockfiles unchanged
+        run: git diff --exit-code -- Cargo.lock fuzz/Cargo.lock
+
+      # W7: feed every target real-proof seeds (sampled per era — accepted
+      # seeds each drive real SNARK verification, so budgets stay bounded; the
+      # full-corpus soundness sweep runs in `cargo test`). A FalseAccept /
+      # fail-open / order-dependence panics, so a green smoke is a CI-level
+      # soundness gate over real proofs, not just a parse check.
+      #
+      # Measured locally (2026-07-17): whole seeded-smoke block ~12 min; the
+      # floor is the first unit paying the lazy VerifyingKey cold builds
+      # (~75 s on the three targets that touch multiple era keys), so budgets
+      # below are soft: libFuzzer finishes the in-flight unit before stopping.
+      - name: Seed corpora from real proofs
+        run: ./scripts/prep-fuzz-corpus.sh
+
+      - name: Smoke run all four targets (seeded, bounded, must not crash)
+        run: |
+          cargo +nightly fuzz run orchard_batch_equivalence -- \
+            -runs=200000 -max_total_time=60 -print_final_stats=1
+          cargo +nightly fuzz run orchard_batch_composition -- \
+            -runs=200000 -max_total_time=60 -print_final_stats=1
+          cargo +nightly fuzz run orchard_era_routing -- \
+            -runs=200000 -max_total_time=90 -print_final_stats=1
+          cargo +nightly fuzz run orchard_single_deep -- \
+            -runs=200000 -max_total_time=90 -print_final_stats=1

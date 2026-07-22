@@ -1,0 +1,49 @@
+[package]
+name = "zebra-batch-equivalence-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.zebra-batch-equivalence]
+path = ".."
+
+# Keep this crate out of the parent package's build graph; cargo-fuzz manages it
+# as its own workspace.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "orchard_batch_equivalence"
+path = "fuzz_targets/orchard_batch_equivalence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "orchard_batch_composition"
+path = "fuzz_targets/orchard_batch_composition.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "orchard_era_routing"
+path = "fuzz_targets/orchard_era_routing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "orchard_single_deep"
+path = "fuzz_targets/orchard_single_deep.rs"
+test = false
+doc = false
+bench = false

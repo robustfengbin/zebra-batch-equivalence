@@ -1,0 +1,4 @@
+[toolchain]
+# cargo-fuzz requires nightly (libFuzzer, -Z build-std, sanitizer coverage).
+channel = "nightly"
+components = ["rust-src", "llvm-tools-preview"]
