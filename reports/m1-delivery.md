@@ -79,6 +79,24 @@ over.
 for any RNG, the seed exists so that any disagreement is a citable, replayable
 artifact rather than an anecdote.
 
+## Test suite
+
+Ten unit/integration suites, 38 tests (plus one nightly full-corpus tier), all
+green under `cargo test` and replayed in CI:
+
+| Suite | Tests | What it pins |
+|---|---|---|
+| lib unit | 5 | oracle classification (accept/reject quadrants), seeded-RNG determinism, era → key selection |
+| `baseline_agreement` | 3 | in-tree pre-NU6.2 mainnet proofs — batch ⟺ single, both accept |
+| `corpus_agreement` | 1 | the full 415-proof real mainnet corpus — batch ⟺ single, zero divergence |
+| `nu6_2_agreement` | 2 | 250 NU6.2 fixed-key real proofs — agreement + era routing |
+| `deep_invariants` | 5 (+1 nightly) | order-independence, duplicate-consistency, sub-batch compositionality, era-routing over real proofs |
+| `strategy_equivalence` | 6 | batch strategy ⟺ each backend's native single strategy (halo2 `SingleVerifier`, reddsa per-item) — accept and reject |
+| `add_reject_equivalence` | 5 | NU6.3 cross-address-disabled add-time rejection equivalence |
+| `v6_pool_dimensions` | 7 | v6/Ironwood two-bundle and cross-pool differentials, `enableCrossAddress` wire parsing |
+| `mutation_smoke` | 2 | mechanically tampered real proofs (bit-flip / truncation / sighash / binding-sig) — both paths reject |
+| `era_routing_anchor` | 2 | the hand-mirrored era routing matches pinned upstream, exhaustively over every network upgrade |
+
 ## NU6.3 / Ironwood readiness (v6-ready)
 
 Ironwood activates on mainnet at height 3,428,143 (~2026-07-28). M1 ships ahead
@@ -124,9 +142,9 @@ as separate era-routing material.
   verifiers wire it in. So batch acceptance is the last word at runtime, and an
   independent cross-check on that acceptance — the batch⟺single equivalence and
   its strategy-level layer — exists in exactly one place: this harness.
-- The April 2026 zcashd⟷Zebra consensus divergence (disclosed alongside a
-  CVSS 9.2 Orchard-crash CVE) is a concrete, recent instance of the bug class
-  a differential oracle catches.
+- The April 2026 zcashd⟷Zebra consensus divergence (`CVE-2026-34377`, disclosed
+  alongside a CVSS 9.2 Orchard-crash CVE, `CVE-2026-34202`) is a concrete, recent
+  instance of the bug class a differential oracle catches.
 - The verification-layer fix window around the 2026-06-05 incident addressed
   the circuit layer; the batch-verification glue above it is exactly what this
   grant covers.

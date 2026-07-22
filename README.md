@@ -1,5 +1,7 @@
 # zebra-batch-equivalence
 
+[![CI](https://github.com/robustfengbin/zebra-batch-equivalence/actions/workflows/ci.yml/badge.svg)](https://github.com/robustfengbin/zebra-batch-equivalence/actions/workflows/ci.yml)
+
 A differential **soundness** oracle for Zcash **Zebra**'s shielded verification:
 assert that the **batch** verification path and the **single** verification path
 always agree. Milestone 1 covers the **Orchard** verifier.
