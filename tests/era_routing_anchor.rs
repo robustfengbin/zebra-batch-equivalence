@@ -10,8 +10,8 @@
 //! glue-logic mistake, not a negligible-probability cryptographic one).
 //!
 //! This anchor is the *correctness* check. It pins the **expected** mapping —
-//! upstream's routing at the grant base revision (Zebra v6.2.0,
-//! `135c1361914cf1759d63953e5175b36b195f0873`) — as an independent ground-truth
+//! upstream's routing at the grant base revision (Zebra v6.3.0,
+//! `f5c5277fe41eba9c74f37098738f93f35dd70d60`) — as an independent ground-truth
 //! table transcribed by hand from the upstream source, and asserts the mirror
 //! reproduces it over **every** [`NetworkUpgrade`]. The table is deliberately a
 //! *separate copy*, not derived from `src/era.rs`, so a wrong edit to the mirror
@@ -27,6 +27,22 @@
 //! functions at the new revision and update `src/era.rs` and the [`expected_era`]
 //! table below to match, in the same commit that bumps the pin — an auditable
 //! acknowledgement trail.
+//!
+//! *v6.2.0 → v6.2.3 bump:* both routing functions re-read at `7121c82b` and
+//! found textually unchanged — upstream's only edits to `halo2.rs` in that range
+//! replace two string errors with `TransactionError::Halo2VerificationFailed`,
+//! which touches neither routing nor verification. The table below therefore
+//! carried over unmodified.
+//!
+//! *v6.2.3 → v6.3.0 bump (M2 base):* both routing functions re-read at
+//! `f5c5277f`. This time the whole of `zebra-consensus/src/primitives/halo2.rs`
+//! is **byte-identical** across the range (sha256
+//! `d6a5e7a67500b63aeda4231e6979aede4d1c4329ec1b8b07887a952ebaeda41e` at both
+//! revisions), so there is no edit to assess — not "we read it and judged the
+//! edits harmless", but "there were none". v6.3.0's changes are network-layer,
+//! peer scoring and RPC; the one consensus change (`MAX_MONEY` cap on the chain
+//! value pool total) lands in `zebra-chain/src/value_balance.rs`, which this
+//! crate does not use. The table below carries over unmodified.
 
 use zebra_batch_equivalence::CircuitEra;
 use zebra_chain::parameters::NetworkUpgrade;

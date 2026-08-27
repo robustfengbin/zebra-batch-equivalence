@@ -63,6 +63,7 @@ use std::sync::Arc;
 
 use orchard::bundle::{Authorized, BatchValidator, Bundle};
 use orchard::circuit::OrchardCircuitVersion;
+use orchard::primitives::redpallas::{batch as redpallas_batch, Binding, SpendAuth};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -71,14 +72,23 @@ use zebra_chain::serialization::ZcashDeserialize;
 use zebra_chain::transaction::{HashType, Transaction};
 use zebra_chain::transparent;
 
+pub mod adversarial;
 pub mod era;
 pub mod invariants;
+pub mod redjubjub;
+pub mod sapling;
+pub mod sprout;
+pub mod tower;
+pub mod verifier;
 
 // Re-exports so downstream crates depend only on this crate and cannot
 // accidentally pull a *different* `orchard` version whose `Bundle` would be an
 // incompatible type.
 pub use era::CircuitEra;
 pub use orchard::circuit::VerifyingKey;
+pub use verifier::{
+    check_strategy_equivalence, BatchVerifier, PerItemReport, StrategyReport,
+};
 pub use zcash_protocol::value::ZatBalance;
 pub use zebra_chain::transaction::SigHash;
 
@@ -182,22 +192,112 @@ pub fn pre_nu6_2_key() -> &'static VerifyingKey {
 /// `BatchValidator::validate` returns `true` for an empty batch, and an empty
 /// conjunction of singles is true.
 pub fn check_equivalence_refs(items: &[&OrchardItem], vk: &VerifyingKey, seed: u64) -> EquivReport {
-    // SINGLE path: each bundle validated alone (batch-of-one), matching
-    // `Item::verify_single`. `all` short-circuits on the first reject.
-    let single_all = items.iter().all(|item| validate_one(item, vk, seed));
-
-    // BATCH path: one validator fed all N bundles, validated once.
-    let batch_ok = validate_batch(items, vk, seed);
-
-    classify(batch_ok, single_all)
+    verifier::check_equivalence_refs::<Orchard>(items, vk, seed)
 }
 
 /// Core differential check over a slice of owned items. See
 /// [`check_equivalence_refs`]; this is the convenience entry point for the
 /// baseline corpus.
 pub fn check_equivalence(items: &[OrchardItem], vk: &VerifyingKey, seed: u64) -> EquivReport {
-    let refs: Vec<&OrchardItem> = items.iter().collect();
-    check_equivalence_refs(&refs, vk, seed)
+    verifier::check_equivalence::<Orchard>(items, vk, seed)
+}
+
+/// Per-item differential check (layer 1b) over Orchard items: asserts batch and
+/// single agree on **each item individually**, not merely on whether the batch as
+/// a whole was clean.
+///
+/// Strictly stronger than [`check_equivalence_refs`]. See
+/// [`verifier::check_equivalence_per_item`] for why the finer granularity is the
+/// one that can see cross-item influence.
+pub fn check_equivalence_per_item(
+    items: &[&OrchardItem],
+    vk: &VerifyingKey,
+    seed: u64,
+) -> PerItemReport {
+    verifier::check_equivalence_per_item::<Orchard>(items, vk, seed)
+}
+
+/// Zebra's Orchard verifier — halo2 proofs and RedPallas signatures, driven
+/// through `orchard::BatchValidator`: the batch API the grant names and the one
+/// `zebra-consensus::primitives::halo2` runs in production.
+///
+/// The first implementation of [`verifier::BatchVerifier`], and the reference
+/// the other pools are modelled on.
+pub struct Orchard;
+
+impl BatchVerifier for Orchard {
+    type Item = OrchardItem;
+    type Context = VerifyingKey;
+    const NAME: &'static str = "orchard (halo2 + RedPallas)";
+
+    fn validate_batch(items: &[&Self::Item], vk: &Self::Context, seed: u64) -> Vec<bool> {
+        validate_batch_per_item(items, vk, seed)
+    }
+
+    fn validate_one(item: &Self::Item, vk: &Self::Context, seed: u64) -> bool {
+        validate_one(item, vk, seed)
+    }
+
+    /// halo2's `SingleVerifier` — per-proof MSM evaluation, reached through
+    /// `Bundle::verify_proof` — together with reddsa's per-item `verify_single`.
+    /// Each backend ships this second strategy; Zebra calls neither.
+    ///
+    /// Both must accept, because that is what `BatchValidator` asserts over the
+    /// same bundle: it queues the RedPallas signatures *and* the halo2 proof, and
+    /// accepts only if both batches verify. Comparing a proof-only independent
+    /// check against a proof-and-signature batch would not be the same question.
+    fn validate_one_independent(item: &Self::Item, vk: &Self::Context) -> Option<bool> {
+        let proof_ok = item.bundle.verify_proof(vk).is_ok();
+        let sigs_ok = redpallas_items(item)
+            .into_iter()
+            .all(|sig_item| sig_item.verify_single().is_ok());
+        Some(proof_ok && sigs_ok)
+    }
+
+    /// A bundle weighs its action count, mirroring `halo2.rs:126` — the **only**
+    /// `RequestWeight` override Zebra ships.
+    ///
+    /// Which is what makes `MAX_BATCH_SIZE = 64` mean something different here
+    /// than anywhere else: a full Orchard batch is bounded at 64 actions, while
+    /// a full batch of any other pool is 64 *items*, each carrying an unbounded
+    /// number of proofs or signatures.
+    fn item_weight(item: &Self::Item) -> usize {
+        item.action_count()
+    }
+}
+
+/// Every RedPallas item of one bundle — each action's spend-auth signature plus
+/// the bundle's binding signature — exactly the set `BatchValidator::add_bundle`
+/// queues for it.
+///
+/// Lives here rather than in a test file because reaching the independent
+/// signature path needs it, and that is oracle machinery rather than a test
+/// fixture.
+///
+/// **RedPallas only.** Each pool needs its own decomposition and they do not
+/// share a type: this returns `reddsa::batch::Item<orchard::SpendAuth,
+/// orchard::Binding>`, while Sapling's signatures are RedJubjub — the same
+/// `reddsa` batch machinery instantiated at different curve parameters. The
+/// shape of the step generalises; the function does not.
+pub fn redpallas_items(item: &OrchardItem) -> Vec<redpallas_batch::Item<SpendAuth, Binding>> {
+    let sighash = item.sighash.0;
+    let mut items: Vec<redpallas_batch::Item<SpendAuth, Binding>> = item
+        .bundle
+        .actions()
+        .iter()
+        .map(|action| {
+            action
+                .rk()
+                .create_batch_item(action.authorization().clone(), &sighash)
+        })
+        .collect();
+    items.push(
+        item.bundle.binding_validating_key().create_batch_item(
+            item.bundle.authorization().binding_signature().clone(),
+            &sighash,
+        ),
+    );
+    items
 }
 
 /// Validate a single item as a batch-of-one. Equivalent to
@@ -212,26 +312,40 @@ pub(crate) fn validate_one(item: &OrchardItem, vk: &VerifyingKey, seed: u64) -> 
     bv.validate(seeded_rng(seed))
 }
 
-/// Validate all items as one aggregate batch. A single un-queueable bundle fails
-/// the whole batch closed (matching how a rejected queue poisons that item).
-pub(crate) fn validate_batch(items: &[&OrchardItem], vk: &VerifyingKey, seed: u64) -> bool {
+/// Validate all items as one aggregate batch, returning **one verdict per item**
+/// in input order — the shape Zebra's halo2 service actually produces.
+///
+/// Mirrors `zebra-consensus::primitives::halo2`'s `Service::call`
+/// (`halo2.rs:467-510`): a bundle that fails to enqueue is rejected *on its own*
+/// (upstream's own words: *"Reject the item on its own without poisoning the rest
+/// of the batch"*), while every bundle that did enqueue receives the one shared
+/// verdict from the batch's single `validate` call.
+///
+/// Note this does **not** short-circuit on a failed enqueue. Production keeps
+/// accepting subsequent items after one is rejected, so stopping early would
+/// batch a different set of bundles than production would.
+pub(crate) fn validate_batch_per_item(
+    items: &[&OrchardItem],
+    vk: &VerifyingKey,
+    seed: u64,
+) -> Vec<bool> {
     let mut bv = BatchValidator::new(vk);
-    for item in items {
-        if bv.add_bundle(&item.bundle, item.sighash.0).is_err() {
-            return false;
-        }
-    }
-    bv.validate(seeded_rng(seed))
+    let queued: Vec<bool> = items
+        .iter()
+        .map(|item| bv.add_bundle(&item.bundle, item.sighash.0).is_ok())
+        .collect();
+    let shared = bv.validate(seeded_rng(seed));
+    queued.into_iter().map(|ok| ok && shared).collect()
 }
 
-/// The four-way classification of a (batch, single) result pair.
-fn classify(batch_ok: bool, single_all: bool) -> EquivReport {
-    match (batch_ok, single_all) {
-        (true, true) => EquivReport::Agree(true),
-        (false, false) => EquivReport::Agree(false),
-        (true, false) => EquivReport::FalseAccept,
-        (false, true) => EquivReport::FalseReject,
-    }
+/// Whether the batch accepted **every** item — the whole-batch view, and the
+/// conjunction of [`validate_batch_per_item`].
+///
+/// Retained for the invariants that compare whole-batch outcomes across
+/// permutations and sub-batches, where the question genuinely is about the batch
+/// rather than about an individual item.
+pub(crate) fn validate_batch(items: &[&OrchardItem], vk: &VerifyingKey, seed: u64) -> bool {
+    validate_batch_per_item(items, vk, seed).into_iter().all(|ok| ok)
 }
 
 /// A deterministic, seedable RNG (ChaCha-based `StdRng`, which is `CryptoRng` as
@@ -352,14 +466,6 @@ pub fn derive_seed(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn classify_covers_all_four_quadrants() {
-        assert_eq!(classify(true, true), EquivReport::Agree(true));
-        assert_eq!(classify(false, false), EquivReport::Agree(false));
-        assert_eq!(classify(true, false), EquivReport::FalseAccept);
-        assert_eq!(classify(false, true), EquivReport::FalseReject);
-    }
 
     #[test]
     fn only_disagreements_report_disagreement() {

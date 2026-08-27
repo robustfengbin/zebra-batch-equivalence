@@ -11,8 +11,16 @@
 //! * under the supporting key (NU6.3-onward) it is accepted at add time and, being genuinely
 //!   proven, verifies end to end — `Agree(true)`. This doubles as the suite's first
 //!   **synthetic NU6.3-era accept-true vector** (W4f leg 1): a real PostNu6_3 proof, not a stub;
-//! * folded into an otherwise-valid batch, an un-queueable bundle must poison the whole batch
-//!   identically on both paths — batch aggregation cannot mask an item that never entered it.
+//! * folded into an otherwise-valid batch, an un-queueable bundle must be rejected **on its
+//!   own** — every valid neighbour keeps the verdict it reaches alone. This is the promise
+//!   `zebra-consensus`'s halo2 service states at its own enqueue-failure branch
+//!   (`halo2.rs:471`, v6.3.0): *"Reject the item on its own without poisoning the rest of the
+//!   batch."* Asserting it needs per-item granularity — at whole-batch granularity one
+//!   rejected item makes the batch unclean regardless of what happened to its neighbours, so
+//!   the promise is unobservable. It also pins a property the rest of the oracle leans on:
+//!   that orchard's `add_bundle` leaves **no residue** behind when it rejects (unlike
+//!   Sapling's `check_bundle`, which by its own documentation may already have queued part of
+//!   a bundle before failing it).
 //!
 //! Why synthesized: a cross-address-*disabled* bundle is unrepresentable in any pre-NU6.3 wire
 //! encoding (the flag bit does not exist there), so no extracted mainnet corpus or fuzzed
@@ -22,7 +30,9 @@
 mod common;
 
 use common::synth;
-use zebra_batch_equivalence::{check_equivalence_refs, CircuitEra, EquivReport, OrchardItem};
+use zebra_batch_equivalence::{
+    check_equivalence_per_item, check_equivalence_refs, CircuitEra, EquivReport, OrchardItem,
+};
 
 /// Unsupported keys (pre-NU6.2, NU6.2): rejected at add time on BOTH paths, across seeds.
 /// A one-sided outcome here would mean the add-time gate diverges between batch and single —
@@ -105,7 +115,7 @@ fn synthetic_ironwood_vector_verifies_under_third_era_only() {
 /// identically on both paths, wherever it sits: batch fails closed at add time, and the
 /// single conjunction contains the same reject. No aggregation masking.
 #[test]
-fn unqueueable_item_poisons_batch_consistently() {
+fn unqueueable_item_is_rejected_alone_and_spares_its_neighbours() {
     let corpus = common::pre_nu6_2_corpus();
     assert!(
         !corpus.is_empty(),
@@ -120,11 +130,14 @@ fn unqueueable_item_poisons_batch_consistently() {
         EquivReport::Agree(true)
     );
 
-    // Splice the disabled bundle at the front, middle, and back of the valid batch: the
-    // group must flip to fail-closed agreement in every position.
+    // Splice the disabled bundle at the front, middle, and back of the valid batch.
     for position in [0, corpus.len() / 2, corpus.len()] {
         let mut refs = valid_refs.clone();
         refs.insert(position, synth::disabled_orchard_item());
+
+        // Whole-batch granularity: the group flips to fail-closed agreement. True, but it
+        // is all this granularity can say — one rejected item makes the batch unclean
+        // whether or not its neighbours were affected.
         let report = check_equivalence_refs(&refs, vk, 0xF00D);
         assert_eq!(
             report,
@@ -132,5 +145,28 @@ fn unqueueable_item_poisons_batch_consistently() {
             "valid pre-NU6.2 batch with an un-queueable bundle spliced at index {position} \
              must fail closed on BOTH paths; got {report:?}"
         );
+
+        // Per-item granularity: the actual promise. Every item must reach the same verdict
+        // inside the batch as it does alone — the un-queueable one rejected, every valid
+        // neighbour still accepted.
+        let per_item = check_equivalence_per_item(&refs, vk, 0xF00D);
+        assert!(
+            per_item.is_agreement(),
+            "splicing an un-queueable bundle at index {position} changed some *other* item's \
+             verdict: {:?}",
+            per_item.disagreements().collect::<Vec<_>>()
+        );
+        for (index, verdict) in per_item.items.iter().enumerate() {
+            let expected = if index == position {
+                EquivReport::Agree(false)
+            } else {
+                EquivReport::Agree(true)
+            };
+            assert_eq!(
+                *verdict, expected,
+                "item {index} of a batch whose un-queueable bundle sits at {position}: \
+                 expected {expected:?}, got {verdict:?}"
+            );
+        }
     }
 }

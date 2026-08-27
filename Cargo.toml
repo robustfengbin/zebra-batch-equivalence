@@ -16,27 +16,110 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(zcash_unstable, values("zf
 # Pinned byte-for-byte to what Zebra vendors so cargo unifies to a single
 # `orchard` / `zcash_protocol` instance — otherwise the `Bundle` type produced
 # by zebra-chain would not be the same type our BatchValidator consumes.
-orchard = "=0.15.0"
-zcash_protocol = "=0.10.0"
+#
+# ⚠️ Read the *lockfile* of the pinned Zebra revision, not its manifest: Zebra
+# declares `orchard = "0.15.0"` (caret) and resolves to 0.15.3 at v6.3.0, while
+# this crate pins exactly. Pinning the manifest's literal would wedge cargo —
+# zcash_primitives 0.30 calls `Builder::add_spend_unwitnessed`, added in
+# orchard 0.15.2.
+#
+# 0.15.0 -> 0.15.3 leaves the verification path intact (checked file-by-file, not
+# taken from the changelog): `src/bundle/batch.rs` (BatchValidator) and
+# `src/bundle.rs` (`verify_proof`) are byte-identical. `src/circuit.rs` differs in
+# exactly two places, neither of which the verifier reaches — `Circuit::
+# from_action_context` unwraps the now-`Option` Merkle path (prover-side witness
+# construction, ZIP 374 deferred anchors), and a `#[cfg(all(test, feature =
+# "verifier-fingerprint"))] mod fingerprint;` declaration. The constraint system,
+# gates and `Instance` are unchanged, so the verifying keys and every M1 corpus
+# result carry over; the rest of the 0.15.x delta is builder/PCZT and wallet-side
+# trial decryption.
+orchard = "=0.15.3"
+zcash_protocol = "=0.10.1"
 # rand 0.8 is what orchard 0.15 and zebra-consensus use (rand_core 0.6.4);
 # StdRng gives us a deterministic, seedable ChaCha-based RNG.
 rand = "0.8"
 
+# --- Sapling and Sprout (M2) ---------------------------------------------
+#
+# Same rule as above: every version below is read from the *lockfile* of the
+# pinned Zebra revision, never from its manifest. `orchard` is the case in point
+# — Zebra's workspace manifest says "0.15.0" while v6.3.0 resolves to 0.15.3.
+#
+# (This paragraph used to cite `zcash_proofs`: "manifest says 0.29.0 while
+# v6.2.3 resolves to 0.30.0". That was never true of one revision — 0.29.0 is
+# what v6.2.0's manifest said, 0.30.0 what v6.2.3's lock resolved. Corrected at
+# the v6.3.0 bump; the rule it illustrates is unchanged.)
+#
+# Sapling's batch path (`BatchValidator`) and its independent single path
+# (`SaplingVerificationContext`) both live here; the crate bundles the Groth16
+# spend/output proofs and the RedJubjub signatures into one validator, which is
+# why Zebra's standalone `redjubjub` verifier service has no production caller.
+sapling-crypto = "=0.7.0"
+# Sapling verifying keys, obtained exactly as Zebra obtains them
+# (`LocalTxProver::bundled`). `bundled-prover` resolves to the
+# `wagyu-zcash-parameters` crate — a normal crates.io dependency, *not* a
+# runtime download of the 700MB parameter files.
+zcash_proofs = { version = "=0.30.0", features = ["bundled-prover"] }
+# Sprout JoinSplit proofs: `groth16::batch::Verifier` is the batch path and
+# `batch::Item::verify_single` -> `verify_proof` the independent one. Also
+# supplies `Proof::read`, needed to decode the proof bytes a Sapling
+# description carries before either Sapling path can consume them.
+bellman = "=0.14.0"
+# `bellman::groth16::Proof` is generic over the pairing engine; naming Zebra's
+# curve is what lets the RedJubjub extraction reproduce `check_bundle`'s
+# decode-then-stop behaviour without a value to infer it from. Already in the
+# dependency closure via bellman — this only makes it nameable.
+bls12_381 = "=0.8.0"
+# `h_sig`, one of the public inputs to a Sprout JoinSplit proof. Zebra computes
+# it with the same crate at the same version (`groth16.rs:117`).
+blake2b_simd = "=1.0.4"
+# `ExtendedPoint`, for decoding a Sapling output's ephemeral key on the
+# independent path (the batch path decodes it internally).
+jubjub = "=0.10.0"
+# `GroupEncoding`, which is where `ExtendedPoint::from_bytes` actually lives.
+group = "=0.13.0"
+
 # Drives the *existing* Zebra verifiers through public APIs only — no upstream
 # source modifications (grant commitment). Plain upstream Zebra, pinned by git
-# revision to the grant base commit (v6.2.0); cargo fetches and pins it
+# revision to the M2 base commit (v6.3.0); cargo fetches and pins it
 # automatically, so a single clone builds directly — no local checkout needed.
-zebra-chain = { git = "https://github.com/ZcashFoundation/zebra.git", rev = "135c1361914cf1759d63953e5175b36b195f0873" }
+# Dev and public trees now share this form: the export is a diff, not a
+# manifest rewrite.
+zebra-chain = { git = "https://github.com/ZcashFoundation/zebra.git", rev = "f5c5277fe41eba9c74f37098738f93f35dd70d60" }
+
+# --- the batching layer itself (M2) ---------------------------------------
+#
+# Every verifier above is reached through its backend crate, which is where the
+# batch *mathematics* lives. This is the other half: the middleware that decides
+# **which items share a batch**, which is Zebra's own code and which M1 never
+# touched. Same git revision as zebra-chain, so it is the same source tree.
+#
+# Safe to pull in where `zebra-consensus` is not: its dependency closure is pure
+# tower ecosystem (futures/pin-project/rayon/tokio/tower/tracing) with no zebra
+# crate in it, so it brings in no `zebra-state` and therefore no rocksdb.
+tower-batch-control = { git = "https://github.com/ZcashFoundation/zebra.git", rev = "f5c5277fe41eba9c74f37098738f93f35dd70d60" }
+# `Service`, to implement the batched side the middleware drives.
+tower = "=0.4.13"
+# The watch channel a flushed batch broadcasts its verdict over — the mechanism
+# by which one batch result reaches every item that waited for it, which is the
+# thing the tower-layer assertions are about. Pinned to what this tree already
+# resolved so adding the middleware cannot drift the runtime.
+tokio = { version = "=1.52.3", features = ["sync"] }
+futures = "=0.3.32"
 
 [dev-dependencies]
 # The baseline-agreement test (real pre-NU6.2 mainnet proofs) reads block
 # vectors from zebra-test::vectors::MAINNET_BLOCKS.
-zebra-test = { git = "https://github.com/ZcashFoundation/zebra.git", rev = "135c1361914cf1759d63953e5175b36b195f0873" }
+zebra-test = { git = "https://github.com/ZcashFoundation/zebra.git", rev = "f5c5277fe41eba9c74f37098738f93f35dd70d60" }
 # Tests additionally need zebra-chain's `fake_v6_*` structural-transaction
 # helpers (`transaction::arbitrary`), which upstream gates behind this feature.
 # Dev-only: `cargo build` and the fuzz workspace never enable it.
-zebra-chain = { git = "https://github.com/ZcashFoundation/zebra.git", rev = "135c1361914cf1759d63953e5175b36b195f0873", features = ["proptest-impl"] }
+zebra-chain = { git = "https://github.com/ZcashFoundation/zebra.git", rev = "f5c5277fe41eba9c74f37098738f93f35dd70d60", features = ["proptest-impl"] }
 # The strategy-differential suite asserts which plonk::Error variant halo2's
 # SingleVerifier rejects with. Pinned to the exact version orchard resolves so
 # no second halo2_proofs instance enters the graph.
 halo2_proofs = "=0.3.2"
+# The tower-layer suite needs a runtime to spawn the batch worker onto, and
+# `sleep` to drive arrival timing. Same pin as the non-dev dependency; features
+# are unioned, so this adds no version pressure.
+tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros", "time"] }

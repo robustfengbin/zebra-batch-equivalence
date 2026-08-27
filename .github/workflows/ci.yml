@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The Zebra revision this harness pins to lives in Cargo.toml as a git
+  # dependency (`rev = ...`, v6.3.0), so cargo fetches and pins it during the
+  # build — no checkout step, and CI cannot drift from a local tree. The oracle
+  # drives Zebra's verifiers through public APIs only; no source changes.
 
 jobs:
   test:
@@ -21,15 +25,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          # Matches `rust-version` in Cargo.toml (MSRV unchanged by the v6.2.0 re-baseline).
+          # Matches `rust-version` in Cargo.toml (MSRV unchanged by the v6.3.0 re-baseline).
           toolchain: "1.88"
 
       - uses: Swatinem/rust-cache@v2
 
       # Unit tests (oracle classification) plus the baseline-agreement test:
       # real pre-NU6.2 Orchard proofs must satisfy batch == single with zero
-      # spurious disagreements (grant AC2). Zebra is a git dependency pinned in
-      # Cargo.toml, so the first build fetches it — no manual checkout needed.
+      # spurious disagreements (grant AC2).
       - name: cargo test
         run: cargo test --all-targets --locked
 
@@ -50,12 +53,13 @@ jobs:
         run: cargo install cargo-fuzz --locked
 
       # grant AC1: the harness builds and runs in CI. Build all four targets.
+      - name: Build all fuzz targets
+        run: cargo +nightly fuzz build
+
       # cargo-fuzz has no `--locked` flag and re-resolves patch versions of
       # transitive registry deps, so the fuzz job's resolution is left free; the
       # reproducible, lock-pinned run is the `test` job's `cargo test --locked`.
       # A broken resolution still fails here at build or smoke-run.
-      - name: Build all fuzz targets
-        run: cargo +nightly fuzz build
 
       # W7: feed every target real-proof seeds (sampled per era — accepted
       # seeds each drive real SNARK verification, so budgets stay bounded; the
