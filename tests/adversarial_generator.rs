@@ -34,7 +34,7 @@
 //! cache state) has not been, so the magnitude is the argument and no individual
 //! measurement explains itself.
 //!
-//! `reports/m2-coverage.md` §7 is the single place that states it, and the individual
+//! `reports/m2-delivery.md` is the single place that states it, and the individual
 //! runs are not repeated here. This header used to carry its own narrower range from
 //! three earlier runs, and kept carrying it after the report moved to ten — the same
 //! quantity in two exported files, disagreeing, in a deliverable whose whole claim is

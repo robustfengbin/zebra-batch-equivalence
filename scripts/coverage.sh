@@ -34,7 +34,7 @@ WITH_TESTS=0; [[ "${1:-}" == "--with-tests" ]] && WITH_TESTS=1
 #
 #   NIGHTLY=nightly-2026-07-03 ./scripts/coverage.sh --with-tests
 #
-# (`reports/m2-coverage.md` names the toolchain its numbers were produced under.
+# (`reports/m2-delivery.md` names the toolchain its numbers were produced under.
 # Note rustup's dated channels are named by *release* date, one day after the
 # rustc commit date the compiler reports — nightly-2026-07-03 is the build that
 # `rustc -vV` calls `c397dae80 2026-07-02`. Picking the channel that matches the

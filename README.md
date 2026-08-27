@@ -8,8 +8,9 @@ Sprout Groth16, Orchard RedPallas and Sapling RedJubjub — adds an adversarial
 corpus generator, and drives Zebra's own batching middleware
 (`tower-batch-control`) rather than only batches this harness groups itself.
 
-Coverage of the batch glue layer is measured in
-[`reports/m2-coverage.md`](reports/m2-coverage.md).
+The milestone report — deliverables mapped to the grant text, the coverage
+measurements and the attribution matrix — is
+[`reports/m2-delivery.md`](reports/m2-delivery.md).
 
 ## The property, and why it is unguarded
 
@@ -75,7 +76,7 @@ is modified.**
 | --- | --- |
 | All four verifiers under the equivalence oracle | ✅ Sapling Groth16 (`src/sapling.rs`), Sprout Groth16 (`src/sprout.rs`), Sapling RedJubjub (`src/redjubjub.rs`); Orchard RedPallas shipped in M1 (`src/lib.rs`, `NAME = "orchard (halo2 + RedPallas)"`) and is now folded into the shared trait |
 | Adversarial generators produce mostly-valid-plus-one-invalid batches | ✅ `src/adversarial.rs` — valid base, single-element tamper, batch composition, with `check_shape` failing loudly when a tamper did not actually invalidate anything |
-| Coverage report delivered | ✅ [`reports/m2-coverage.md`](reports/m2-coverage.md) — the three objects the grant names (`tower-batch-control`, `BatchValidator`, reddsa batch) all measured |
+| Coverage report delivered | ✅ [`reports/m2-delivery.md`](reports/m2-delivery.md), *Coverage* — the three objects the grant names (`tower-batch-control`, `BatchValidator`, reddsa batch) all measured, with a per-suite attribution matrix |
 
 Two limits the report states and this file repeats rather than leaves to be
 discovered: the four surfaces M2 added have **deterministic-test coverage only**
@@ -100,11 +101,11 @@ src/era.rs            three circuit eras, cached keys, production routing
 src/invariants.rs     deep batching invariants + classification
 src/bin/              corpus extraction from block dumps (Orchard, and historical Groth16)
 fuzz/                 four cargo-fuzz targets, all Orchard
-tests/                15 integration suites, one per question (see reports/m2-coverage.md §4)
+tests/                15 integration suites, one per question (attributed in reports/m2-delivery.md)
 examples/             seed dumping, pool surveys, batch-vs-single speedup measurement
 scripts/coverage.sh   the three coverage columns; coverage-attribution.sh the per-suite matrix
 seeds-real/           real mainnet corpora: Orchard eras, NU6.3 activation window, historical Groth16
-reports/              m2-coverage.md — the milestone's coverage and findings report
+reports/              m2-delivery.md — the milestone report; m1-delivery.md — M1's
 ```
 
 ## Fuzz targets
@@ -142,7 +143,7 @@ cargo +nightly fuzz run   orchard_batch_equivalence
 # Coverage of the Orchard batch path
 cargo +nightly fuzz coverage orchard_batch_equivalence
 
-# The coverage tables in reports/m2-coverage.md (~1h each)
+# The coverage tables in reports/m2-delivery.md (~1h each)
 rustup toolchain install nightly-2026-07-03
 NIGHTLY=nightly-2026-07-03 ./scripts/coverage.sh --with-tests
 ./scripts/coverage-attribution.sh

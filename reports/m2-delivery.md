@@ -3,15 +3,14 @@
 > Batch-vs-Single Verification Equivalence for Zebra's shielded verifiers
 > Milestone 2 of 3 · delivered 2026-08-27 · repo: `https://github.com/robustfengbin/zebra-batch-equivalence`
 > Base: Zebra **v6.3.0** (`f5c5277fe41eba9c74f37098738f93f35dd70d60`), pinned by git rev
-> Measurements and method: `reports/m2-coverage.md`. This report maps deliverables to the grant text and states what was found.
+> This is the milestone's single report: what was delivered against the grant text, what
+> was measured, and what the oracle found.
 >
-> **Where a number comes from.** Every *coverage* figure quoted here is measured in
-> `reports/m2-coverage.md` and reproduced from there; no coverage measurement
-> originates in this document or in a forum post — those two cite, they do not
-> produce. The test counts and corpus sizes come from `cargo test` and from the
-> committed corpus, reproducible with the commands under *Reproducing this*.
-> Each figure has exactly one place it is produced, because a stale copy reads
-> exactly like a current one.
+> **Where a number comes from.** Coverage figures are produced by `scripts/coverage.sh`
+> and `scripts/coverage-attribution.sh` and reported here; test counts come from
+> `cargo test`; corpus sizes from the committed corpus. Every command that reproduces
+> them is under *Reproducing this*. A forum post citing these figures cites this file —
+> it does not produce them.
 
 ## Summary
 
@@ -101,7 +100,7 @@ be pinned to either side. The grant names RedJubjub separately; reporting it as
 
 ### 3. *"region-coverage report on `tower-batch-control` + `BatchValidator` + reddsa batch"*
 
-`reports/m2-coverage.md`.
+The *Coverage* section below.
 
 These are three **measurement objects** — crates and modules — not three further
 verifiers. `tower-batch-control` in particular is Zebra's batching middleware,
@@ -131,11 +130,36 @@ are that crate's public API.
 
 ## Coverage
 
-MERGED column (region % / line %) — the union of the deterministic suite and the
-fuzz seed replay, and the column the acceptance criterion is judged on. The
-fuzz-only and test-only columns are kept separate in `reports/m2-coverage.md`,
-because a reader who sees only the merged number cannot tell whether the reject
-paths were reached on purpose or by a lucky mutation.
+### How it is measured
+
+`scripts/coverage.sh` produces three columns from two harnesses:
+
+- **FUZZ-ONLY** — replay of the committed seed corpus through the coverage-guided fuzz
+  targets. Drives the Orchard path only, so most surfaces are legitimately absent here.
+- **TEST-ONLY** — the deterministic test suite.
+- **MERGED** — the union, and **the column the acceptance criterion is judged on**.
+
+They are reported separately because the reject-arm coverage comes from the deterministic
+tests (`mutation_smoke`, `add_reject_equivalence`), not from a fuzz hit — a merged number
+alone cannot show that. `--with-tests` produces all three in about an hour; the default
+run produces FUZZ-ONLY in about thirty minutes.
+
+**Toolchain (these numbers depend on it):** `rustc 1.98.0-nightly (c397dae80 2026-07-02)`,
+via `rust-toolchain.toml`'s `channel = "nightly"`.
+
+⚠️ **Region counts are not toolchain-independent.** The test suite is a set of behavioural
+assertions and reproduces from a clean clone on any toolchain that builds the tree. Region
+*counts* do not: inlining decisions belong to the compiler, so a different nightly can move
+them with the source byte-identical. `rust-toolchain.toml` pins the channel but not a date,
+so `rustup update` alone changes what a reader measures. To reproduce the figures below,
+pin the nightly named above — and note the date: rustup names a dated channel by its
+*release* date, one day after the commit date `rustc -vV` prints, so `nightly-2026-07-02`
+installs `4c9d2bfe4 2026-07-01`, the compiler before this one. Both call themselves
+`1.98.0-nightly` and neither errors.
+
+### Numbers
+
+MERGED column, region % / line %.
 
 | Surface | Object | M2 final |
 |---|---|---|
@@ -152,27 +176,86 @@ paths were reached on purpose or by a lucky mutation.
 | bellman `groth16/verifier.rs` | supporting | 97.67 / 96.88 |
 | bellman `groth16/verifier/batch.rs` | supporting | 94.59 / 94.63 |
 
-Three readings the numbers support:
+### Attribution: a crate is not a verifier
 
-- **`tower-batch-control` went from `not driven` to measured.** At M1 nothing in
-  this repository linked it. It is now driven by exactly one suite, which
-  `scripts/coverage-attribution.sh` shows by running one test binary at a time
-  rather than arguing it from the dependency graph.
-- **bellman `groth16/verifier/batch.rs`: 56.31 → 94.59 when Sprout landed.** That
-  row was Sapling's alone at mid-build; Sprout added 38 points of regions Sapling
-  never reaches, so the two Groth16 consumers overlap far less than a shared
-  crate name suggests. Measured one suite at a time, Sapling's reaches 56.31 and
-  Sprout's 44.59: neither accounts for the merged figure.
-- **A crate is not a verifier.** `reddsa/src/batch.rs` is reached by *both*
-  signature verifiers through one compiled file — RedPallas directly from
-  `orchard`, RedJubjub through a 127-line wrapper — so its merged number is a
-  union that belongs to neither, and it is **not comparable to M1's**, where the
-  same figure described RedPallas alone.
+The merged table answers the acceptance criterion. It cannot answer *which verifier
+covered this*, and the natural reading of a per-crate table — one row, one verifier — is
+wrong for three of these rows. `scripts/coverage-attribution.sh` measures the mapping
+rather than arguing it from the dependency graph: it runs one test binary at a time and
+reports which surfaces that binary lit. Across all eleven binaries, region %:
 
-The attribution matrix also shows the negative controls staying dark: the textual
-drift anchor and the library's own unit tests link these crates and report 0.00
-across every surface. A row that stayed dark where it should be dark is what
-makes the lit rows worth believing.
+| Surface | Which suites reach it (region %) | MERGED |
+|---|---|---|
+| `tower-batch-control/src/service.rs` | **`tower_batching` alone** 76.36 | 76.36 |
+| `tower-batch-control/src/worker.rs` | **`tower_batching` alone** 59.43 | 59.43 |
+| bellman `groth16/verifier/batch.rs` | `sapling_agreement` 56.31 / **`sprout_agreement` 44.59** / `adversarial_generator` 56.76 | **94.59** |
+| bellman `groth16/verifier.rs` | `sprout_agreement` 97.67 / `sapling_agreement` 95.35 / lib units 37.21 | 97.67 |
+| sapling `verifier/batch.rs` | `adversarial_generator` **89.08** / `sapling_agreement` 86.55 | 89.08 |
+| sapling `verifier.rs` | `sapling_agreement` / `adversarial_generator` 97.09 | 97.09 |
+| sapling `verifier/single.rs` | `sapling_agreement` **100.00** / `adversarial_generator` 48.00 | 100.00 |
+| redjubjub `src/batch.rs` | **`redjubjub_agreement` 100.00** / `tower_batching` 78.79 / Sapling suites 72.73 | 100.00 |
+| reddsa `src/batch.rs` | **twelve binaries**, peak `strategy_equivalence` 98.45, floor 84.02 | 98.97 |
+| orchard `bundle/batch.rs` | eight Orchard binaries, 81.03–91.38 / **0.00 in every Sapling/Sprout suite** | 100.00 |
+| halo2 `plonk/verifier/batch.rs` | eight Orchard binaries / **100.00 in `mutation_smoke` alone**, 92.59 elsewhere | 100.00 |
+| halo2 `plonk/verifier.rs` | eight Orchard binaries, peak `strategy_equivalence` 94.87 | 95.11 |
+
+What the matrix settles that the merged column cannot:
+
+1. **`tower-batch-control` is driven by exactly one suite.** `tower_batching` is the only
+   binary that links it; every other reports it absent. The measurement object the grant
+   names third had no number at all until 2026-07-29, and now has one with unambiguous
+   provenance.
+2. **The bellman rows are shared between Sapling and Sprout, not owned by either.**
+   Sapling alone reaches 56.31, Sprout alone 44.59, merged 94.59 — so the two Groth16
+   consumers exercise largely *different* regions, and Sprout is not redundant coverage of
+   a path Sapling already exercised. Before Sprout existed those rows were Sapling's alone,
+   so reading them off the crate name would have credited a verifier not yet written.
+   ⚠️ The obvious arithmetic is not available: coverage is a set, not a quantity. 56.31 and
+   44.59 do not add, and 94.59 minus either is not "the other's contribution". The figures
+   support the ordering, not a percentage of overlap.
+3. **`reddsa` is the widest-shared row**, lit by both signature verifiers — 84.02 from the
+   Sapling suite (RedJubjub) and up to 98.45 from `strategy_equivalence` (RedPallas).
+   RedPallas reaches it directly from `orchard` and never enters the 127-line `redjubjub`
+   wrapper; RedJubjub can only get there through it. The merged figure is their union and
+   belongs to neither — and it is **not comparable to M1's**, where the same number
+   described RedPallas alone.
+4. **The reject arms come from the deterministic tests, not from a fuzz hit.** halo2's
+   batch verifier reaches 100.00 in exactly one binary — `mutation_smoke` — and 92.59 in
+   every other.
+5. **The negative controls behave.** `era_routing_anchor` (a textual drift anchor) and the
+   library's own unit tests report 0.00 across every surface: linked against these crates,
+   never entering them.
+
+**Two rows changed category during M2, and that is a result rather than an inconvenience.**
+At mid-build, bellman's batch verifier read 56.31 in both columns and `redjubjub/src/batch.rs`
+read 72.73 in both — each owned outright by the Sapling suite. Adding the two verifiers the
+grant names moved them to 94.59 and 100.00. A row that stops being single-suite-owned is a
+row where the new verifier reached code the old one did not, which is what extending the
+oracle to all four verifiers was supposed to buy.
+
+### The lowest row, and why it stays there
+
+`sapling-crypto/src/verifier/batch.rs` is the lowest `BatchValidator` row at 89.08 / 86.96,
+and it is not being closed. `check_bundle` has five rejection points; the adversarial
+generator reaches one — spend-side proof decode failure. The other four:
+
+| Uncovered rejection point | What a tamper aimed at it would prove |
+|---|---|
+| output-side proof decode failure | reachable, equivalent in kind to the spend-side case already covered |
+| `rk` small-order rejection | **nothing — batch and single share this check** |
+| ephemeral-key decode failure | **nothing — batch and single share this check** |
+| `epk` small-order rejection | **nothing — batch and single share this check** |
+
+The last three live in `SaplingVerificationContextInner`, the private context that
+`BatchValidator` and `SaplingVerificationContext` **both** delegate to. A tampered input
+that trips any of them makes *both* paths reject, so the oracle reports agreement whatever
+the input was: the regions light up and the property under test is exercised no further.
+
+**89.08 is not "13% untested".** The batch-versus-single question has been asked everywhere
+the two paths are capable of answering differently, plus one family of decode failures
+where they are. What would raise the number *and* mean something is a tamper that makes
+`check_bundle` reject **after** it has queued part of a bundle — the family the residue
+work below has already shown to be reachable, and where further adversarial effort belongs.
 
 **Re-measured at the base bump.** The whole table was produced again when the pin
 moved from v6.2.3 to v6.3.0, on different hardware, with the toolchain held
@@ -201,9 +284,6 @@ appear it is a divergence in the *reject* direction — valid items in a shared
 batch coming back rejected when they would pass individually. It is a liveness
 effect, not a false-accept, and no real-mainnet input has produced one.
 
-The oracle also surfaced one behaviour worth reporting, and it is reported as
-**evidence that the instrument works**, not as a vulnerability claim.
-
 ### Rejected bundles leave residue in a shared Sapling batch
 
 `sapling_crypto::BatchValidator::check_bundle` validates and enqueues in the same
@@ -231,44 +311,21 @@ neighbours:
 
 The only variable is whether residue entered the shared batch.
 
-### What it is, and what it is not
+### Classification, and what happens to it
 
-**It is not a soundness problem**, and that is structural rather than merely
-unobserved: residue can only come from a bundle already judged invalid, and it
-can only add proofs that may fail. It can make a batch reject more; it cannot
-make one accept more. Zebra's `Fallback` then re-verifies individually — where no
-other bundle's residue is present — so affected transactions do pass. The cost is
-that the batch degrades into one-at-a-time verification.
+**It is not a soundness problem**, structurally: residue comes only from a bundle already
+judged invalid and can only add proofs that may fail, so it makes a batch reject more,
+never accept more. Zebra's `Fallback` re-verifies individually and affected transactions
+pass. The cost is losing aggregation — **4.5x–7.8x** over ten runs, wall clock, debug
+build — bounded by `MAX_BATCH_SIZE` of 64.
 
-That guarantee rests on one specific composition order —
-`Fallback::new(Batch::new(...), verify_single)`, with the fallback *outside* the
-batch. Single verification succeeds, the request returns `Ok`, and no misbehaviour
-score is ever reached. **Reverse the two and the same residue stops being a
-delay**: a batch failure would surface as a verification error, and honest peers
-would score one another for traffic that is valid. Nothing enforces that order
-today, so it is recorded here.
+**Not filed upstream as part of this milestone.** The library documents the behaviour and
+a workaround, so a report of it alone would be answered by a citation. It is carried to
+M3 with a release-build measurement and a patch, where the grant's upstream contributions
+land.
 
-The cost is a range, not a number: **4.5x–7.8x** across ten runs of
-`examples/batch_speedup.rs` over the same corpus and seed, on two machines; wall
-clock, debug build. Machine load is the one dispersion source that has been
-isolated; the rest has not been, so this report quotes the range and the
-magnitude and does not explain any individual measurement. **The range is the
-correct form for this quantity, not a hedge about measurement quality**: a single
-figure would be one draw from that spread, and a reader reproducing it would get
-a different one. No individual run is in doubt.
-
-Amplification is linear and bounded: `MAX_BATCH_SIZE` is 64 and Sapling weights
-one unit per bundle, so one crafted transaction reaches at most the 64 bundles
-sharing its batch. A fix exists and is cheap — validate in two passes, queueing
-nothing until every check has passed; the extra pass only decodes and
-range-checks, so the number of proof verifications is unchanged. Orchard's
-`add_bundle` is already this shape.
-
-**Not filed upstream as part of this milestone.** The underlying behaviour is
-already documented by the library that exhibits it, together with a workaround,
-so a report of it alone would be answered by a citation. It is carried to M3,
-where a release-build figure and a concrete patch can accompany it, and where the
-grant's upstream contributions land.
+Appendix A carries the full analysis: the composition order the "transactions still pass"
+guarantee depends on, the dispersion behind the range, and the shape of the fix.
 
 ## Test suite
 
@@ -321,24 +378,16 @@ that rustup names a dated channel by its *release* date, one day after the commi
 date `rustc -vV` prints — `nightly-2026-07-03` is the channel whose compiler
 reports `2026-07-02`, and both are called 1.98.0-nightly.
 
-Two dependency deltas against upstream Zebra are stated and settled in
-`reports/m2-coverage.md` by comparing the surface actually used rather than the
-crate: `reddsa` 0.5.1 → 0.5.2, whose `batch.rs` is identical, and `tokio-util`
+Two dependency deltas against upstream Zebra, settled by comparing the surface
+actually used rather than the crate: `reddsa` 0.5.1 → 0.5.2, whose `batch.rs` is identical, and `tokio-util`
 0.7.18 → 0.7.19, where `tower-batch-control` uses exactly one item —
 `PollSemaphore` — whose source file is byte-for-byte identical between the two
 versions.
 
 ## Scope and honest limitations
 
-- **Sapling `verifier/batch.rs` at 89.08 / 86.96 is the lowest `BatchValidator`
-  row, and we are not closing it by padding.** `check_bundle` has five rejection points
-  and the adversarial generator reaches one. Three of the other four live in the
-  private context that the batch validator and the single validator **both**
-  delegate to, so a tamper tripping any of them makes *both* paths reject and the
-  oracle reports agreement whatever the input was. They are enumerated as
-  *reachable but non-discriminating*. What would raise the number *and* mean
-  something is a tamper that makes `check_bundle` reject **after** it has queued
-  part of a bundle.
+- **Sapling `verifier/batch.rs` at 86.96 is deliberate**, for the reason set out with the
+  figure above: three of its four uncovered rejection points are checks both paths share.
 - **`worker.rs` at 59.43 will not move by adding batch tests.** Its uncovered
   regions are shutdown paths, channel-closure handling and error propagation,
   reachable only by *faulting* the service; this harness's `poll_ready` returns
@@ -395,3 +444,47 @@ rather than at M3 review and we will re-plan.
 - **Monthly updates** continue in the grant thread.
 
 *Contact: robustfengbin (GitHub / Zcash forum)*
+
+---
+
+## Appendix A — the Sapling residue behaviour in full
+
+The body states the finding, the controlled experiment and the classification. This is the
+supporting analysis.
+
+**The premise the "affected transactions still pass" guarantee rests on.** It holds because
+Zebra composes the two layers in one specific order — `Fallback::new(Batch::new(...),
+verify_single)`, with the fallback *outside* the batch (`zebra-consensus/src/primitives/
+sapling.rs:206-222` at v6.3.0). Single verification succeeds, the request returns `Ok`, and
+no misbehaviour score is ever reached. **Reverse the two and the same residue stops being a
+delay**: a batch failure would surface as a verification error, and honest peers would score
+one another for traffic that is valid. Nothing enforces that order today, so it is recorded
+here.
+
+**The cost is a range, not a number: 4.5x–7.8x**, across ten runs of
+`examples/batch_speedup.rs` over the same corpus and seed, on two machines; wall clock,
+debug build.
+
+Machine load is the one dispersion source that has been isolated: on a single machine,
+three runs under other load spanned 42% while three on the same machine idle spanned 11%.
+The rest has not been. Idling did not merely tighten the spread, it moved it — the idle runs
+sit below the loaded ones rather than among them — and the two machines do not overlap even
+after load is removed. Frequency scaling and cache state are plausible and untested. The
+range and the magnitude are therefore what this report quotes: a single figure would be one
+draw from that spread, and a reader reproducing it would get a different one.
+
+**Amplification is linear and bounded.** `MAX_BATCH_SIZE` is 64 and Sapling weights one unit
+per bundle, so one crafted transaction reaches at most the 64 bundles sharing its batch. Ten
+times the traffic means more batches, not a wider blast radius.
+
+**The fix is cheap.** Validate in two passes, queueing nothing until every check has passed.
+The extra pass only decodes and range-checks, so the number of proof verifications is
+unchanged. Orchard's `add_bundle` is already this shape — not because it was written as two
+phases, but because it has exactly one rejection point and it sits before any queueing.
+
+**Reproducing the experiment.**
+
+```sh
+cargo test --test adversarial_generator -- --nocapture
+cargo run --example batch_speedup          # the speedup measurement
+```
