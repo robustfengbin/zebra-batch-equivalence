@@ -10,6 +10,15 @@
 #
 # Crashes are committed to the corpus repository's crash branch and surface as
 # a failed run here.
+#
+# Pruning runs first, in the same workflow, because the corpus this accumulates
+# is not free to carry: libFuzzer executes all of it before it mutates anything,
+# and an Orchard input costs about a second. Measured 2026-09-22 on the corpus
+# two days of running had produced, merging one target took 456 s to 1,644 s and
+# removed 20-35% of it. Weekly was not often enough -- the first weekly prune
+# timed out on its 400 s share and the job failed with eight targets unpruned --
+# and pruning after fuzzing would leave the fuzzing run carrying the unpruned
+# corpus.
 name: ClusterFuzzLite continuous fuzzing
 
 on:
@@ -58,8 +67,38 @@ jobs:
             echo "Corpus store: **ephemeral** (Actions cache, seven-day eviction) -- \`PERSONAL_ACCESS_TOKEN\` is unset." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-  Fuzzing:
+  Pruning:
+    # Drops inputs whose coverage the rest of the corpus already reaches, and
+    # replaces the stored corpus with what is left. 2000 s a target is 20% over
+    # the slowest merge measured (1,644 s for orchard_batch_composition, 699
+    # inputs); unused time is redistributed to the targets still to run, so this
+    # job takes as long as the merges take rather than as long as the budget.
     needs: corpus-store
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build fuzzers
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: rust
+
+      - name: Prune the stored corpus
+        id: run
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 18000
+          mode: 'prune'
+          storage-repo: ${{ needs.corpus-store.outputs.permanent == 'true' && format('https://{0}@github.com/robustfengbin/zebra-batch-equivalence-corpora.git', secrets.PERSONAL_ACCESS_TOKEN) || '' }}
+          storage-repo-branch: main
+          storage-repo-branch-coverage: gh-pages
+
+  Fuzzing:
+    # Runs whether or not pruning succeeded: a prune that times out leaves a
+    # larger corpus, which is a worse run, not a reason to skip the day's
+    # fuzzing. The failure stays visible on the run.
+    needs: [corpus-store, Pruning]
+    if: ${{ !cancelled() && needs.corpus-store.result == 'success' }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -80,14 +119,19 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # Every fuzz target shares this budget, evenly (ClusterFuzzLite's
           # run_fuzzers.py divides fuzz-seconds by the number of targets): nine
-          # targets, 800 s each. An Orchard input drives real proof verification
+          # targets, 1200 s each. An Orchard input drives real proof verification
           # on both paths and costs seconds, and libFuzzer executes a target's
           # stored corpus before it mutates anything -- a budget that runs out
           # during that pass ends the run with no mutation at all -- so this
           # budget is also the ceiling on how large an Orchard corpus can grow and
-          # still be fuzzed past. At 3600 s the ceiling was about a hundred entries; the seed
-          # count in .clusterfuzzlite/build.sh is sized against the same wall.
-          fuzz-seconds: 7200
+          # still be fuzzed past. The seed count in .clusterfuzzlite/build.sh is
+          # sized against the same wall.
+          #
+          # Measured 2026-09-22, second run: the heaviest target loaded 546
+          # stored inputs in about 550 s of its 800 s. With the Pruning job above
+          # cutting the corpus back first, 1200 s leaves the larger half of the
+          # budget for mutation; fuzz-health reports which half each target got.
+          fuzz-seconds: 10800
           mode: 'batch'
           sanitizer: ${{ matrix.sanitizer }}
           output-sarif: false
