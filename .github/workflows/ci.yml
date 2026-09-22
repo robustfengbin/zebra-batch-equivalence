@@ -16,7 +16,11 @@ env:
 jobs:
   test:
     name: Unit + baseline agreement
-    runs-on: ubuntu-latest
+    # Every job in these workflows pins its runner rather than using
+    # ubuntu-latest, which moves to Ubuntu 26 from 2026-10-19. A runner image
+    # changing under a delivered repository turns CI red for reasons that have
+    # nothing to do with the code, on the dates a reviewer is likeliest to look.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +42,7 @@ jobs:
 
   fuzz:
     name: Fuzz target build + smoke run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 

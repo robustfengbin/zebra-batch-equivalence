@@ -25,9 +25,13 @@ mod common;
 
 use zebra_batch_equivalence::era::CircuitEra;
 use zebra_batch_equivalence::invariants::{
-    check_duplicate_consistency, check_era_routing, check_order_invariance, deep_check,
+    check_duplicate_consistency, check_era_routing, check_era_routing_for_claimed,
+    check_order_invariance, deep_check,
 };
-use zebra_batch_equivalence::{item_from_tx_with_nu, OrchardItem};
+use zebra_batch_equivalence::{
+    check_equivalence_refs, derive_seed, item_from_tx_with_nu, items_from_tx_stream, EquivReport,
+    OrchardItem, Pool,
+};
 use zebra_chain::{block::Block, parameters::NetworkUpgrade, serialization::ZcashDeserializeInto};
 
 /// Full-tier window size: the sub-batch prefix walk stays ≤16 deep, mirroring
@@ -214,4 +218,53 @@ fn deep_check_full_real_corpus_folded() {
         "deep_check_full_real_corpus_folded: {proofs} proofs / {windows} windows (fold {FOLD}) in {:?}",
         started.elapsed()
     );
+}
+
+/// The first continuous run's only crash, kept as a regression: a claimed era is
+/// not the correct one.
+///
+/// ClusterFuzzLite's first daily run (2026-09-22) stopped `orchard_batch_equivalence`
+/// with a critical `EraFailOpen { correct: Nu6_2, used: Nu6_3Onward }`. The input
+/// is a real NU6.3 Orchard bundle whose trailing control byte a mutation had
+/// turned from `0x02` into `0x4f` — which the target reads as era `Nu6_2`. The
+/// bundle verifies under its own era and no other, which is exactly right; the
+/// harness had taken the byte's claim as fact and reported the bundle's own key
+/// accepting it as a fail-open. The file is that input, unmodified.
+#[test]
+fn a_claimed_era_is_not_trusted_as_the_correct_one() {
+    let data = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fuzz/regressions/orchard_batch_equivalence/crash-a31a4495c0bf01973bfbefa9526911360a442f36"
+    ))
+    .expect("regression input");
+    let (stream, control) = data.split_at(data.len() - 1);
+    let control = control[0];
+    // Decoded the way the fuzz target decodes it.
+    let claimed = CircuitEra::ALL[control as usize % CircuitEra::ALL.len()];
+    assert_eq!(claimed, CircuitEra::Nu6_2);
+    assert_eq!(control >> 6, 0b01, "the pool bits select Orchard-only");
+    let items = items_from_tx_stream(stream);
+    let refs: Vec<&OrchardItem> = items.iter().filter(|i| i.pool == Pool::Orchard).collect();
+    assert_eq!(refs.len(), 1);
+    let seed = derive_seed(&data);
+
+    // What the cryptography does: exactly one era accepts, and it is the bundle's own.
+    let accepting: Vec<CircuitEra> = CircuitEra::ALL
+        .into_iter()
+        .filter(|e| check_equivalence_refs(&refs, e.key(), seed) == EquivReport::Agree(true))
+        .collect();
+    assert_eq!(accepting, vec![CircuitEra::Nu6_3Onward]);
+
+    // What the ungated check says when handed the claim as fact: a fail-open. This
+    // is the false positive, kept visible so the precondition stays documented by
+    // a failing example rather than by a comment alone.
+    assert!(!check_era_routing(&refs, claimed, seed).is_empty());
+
+    // The gated check does not report the claim, and still holds the true era to
+    // the property: every other key rejects.
+    let claimed_report = check_equivalence_refs(&refs, claimed.key(), seed);
+    assert!(check_era_routing_for_claimed(&refs, claimed, claimed_report, seed).is_empty());
+    let true_report = check_equivalence_refs(&refs, CircuitEra::Nu6_3Onward.key(), seed);
+    assert_eq!(true_report, EquivReport::Agree(true));
+    assert!(check_era_routing_for_claimed(&refs, CircuitEra::Nu6_3Onward, true_report, seed).is_empty());
 }

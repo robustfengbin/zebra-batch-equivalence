@@ -18,8 +18,11 @@
 //!     order (orchard draws random scalars per queued position; a flip is
 //!     unsound aggregation).
 //!   * **duplicate-consistency** — duplicating bundles must not change agreement.
-//!   * **era-routing / not-fail-open** — under every *wrong* circuit-era key the
-//!     batch must be rejected by both paths, never accepted.
+//!   * **era-routing / not-fail-open** — when the batch is valid under the era
+//!     the control byte selects, every *other* circuit-era key must be rejected
+//!     by both paths, never accepted. The byte is a claim, not a fact: a batch
+//!     that does not verify under it belongs to another era, and "at most one
+//!     era accepts" for arbitrary input is `orchard_era_routing`'s property.
 //!
 //! false-accept / order-dependence / fail-open panic (libFuzzer captures the
 //! reproducer); false-reject is logged.
@@ -29,7 +32,8 @@
 use libfuzzer_sys::fuzz_target;
 
 use zebra_batch_equivalence::invariants::{
-    check_duplicate_consistency, check_era_routing, check_order_invariance, InvariantViolation,
+    check_duplicate_consistency, check_era_routing_for_claimed, check_order_invariance,
+    InvariantViolation,
 };
 use zebra_batch_equivalence::{
     check_equivalence_refs, derive_seed, items_from_tx_stream, CircuitEra, EquivReport, OrchardItem,
@@ -72,7 +76,8 @@ fuzz_target!(init: {
     let vk = era.key();
 
     // 1. Base equivalence.
-    escalate_equivalence(check_equivalence_refs(&refs, vk, seed), &refs, era, seed);
+    let base = check_equivalence_refs(&refs, vk, seed);
+    escalate_equivalence(base, &refs, era, seed);
 
     // 2. Order-independence.
     if let Some(v) = check_order_invariance(&refs, vk, seed) {
@@ -84,8 +89,12 @@ fuzz_target!(init: {
         escalate_violation(v, &refs, era, seed);
     }
 
-    // 4. Era-routing / not-fail-open (wrong keys must reject both paths).
-    for v in check_era_routing(&refs, era, seed) {
+    // 4. Era-routing / not-fail-open (wrong keys must reject both paths) — only
+    //    when the batch is valid under the era the control byte *claims*. The
+    //    byte is the fuzzer's to change, so a real NU6.3 batch labelled `Nu6_2`
+    //    is accepted by its own key; checked without this gate, that was
+    //    reported as a critical fail-open on the first continuous run.
+    for v in check_era_routing_for_claimed(&refs, era, base, seed) {
         escalate_violation(v, &refs, era, seed);
     }
 });

@@ -132,6 +132,9 @@ pub fn check_subbatch_consistency(
 /// accepted. Covers both the proof-era mismatch (wrong circuit key) and the
 /// cross-address fail-closed path (`add_bundle` rejecting a disabled bundle under
 /// a key that cannot constrain it).
+///
+/// `correct` must be known, not read from an input: this does not check that the
+/// items are valid under it. See [`check_era_routing_for_claimed`].
 pub fn check_era_routing(
     items: &[&OrchardItem],
     correct: CircuitEra,
@@ -152,6 +155,31 @@ pub fn check_era_routing(
         }
     }
     violations
+}
+
+/// Era routing for a batch whose era is *claimed* rather than known — the fuzz
+/// harness's situation, where the era comes from an input byte the fuzzer
+/// mutates freely.
+///
+/// [`check_era_routing`] assumes `items` are valid under `correct`. Handed a
+/// claim instead, a batch that belongs to another era is accepted by its own
+/// key and reported as a fail-open: that is how the first continuous run
+/// (2026-09-22) reported a real NU6.3 bundle, relabelled `Nu6_2` by a mutated
+/// control byte, as a critical soundness break. So the claim is checked only
+/// when both paths accept under the claimed key (`claimed_report`, which the
+/// caller has already computed). Otherwise the batch belongs to some other era
+/// or to none, and whether *more than one* key accepts it is the question
+/// `orchard_era_routing` and `orchard_single_deep` ask of every input.
+pub fn check_era_routing_for_claimed(
+    items: &[&OrchardItem],
+    claimed: CircuitEra,
+    claimed_report: EquivReport,
+    seed: u64,
+) -> Vec<InvariantViolation> {
+    if claimed_report != EquivReport::Agree(true) {
+        return Vec::new();
+    }
+    check_era_routing(items, claimed, seed)
 }
 
 /// Run the full invariant sweep over one same-era batch, returning every

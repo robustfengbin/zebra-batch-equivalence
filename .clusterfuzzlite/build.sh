@@ -77,13 +77,14 @@ done
 # SAMPLE_PER_ERA stays at the smoke run's six, strided across each window. The
 # first version took every seed, on the reasoning that a continuous fuzzer has
 # no budget to protect. It has one: ClusterFuzzLite divides fuzz-seconds evenly
-# across targets (3600 s / 9 = 400 s each in the daily run), and libFuzzer runs
-# its whole starting corpus before -max_total_time starts to count. An Orchard
-# seed costs seconds, not milliseconds -- each drives real proof verification.
-# Measured under OSS-Fuzz's base-runner on 2026-09-22, on a shared machine:
-# orchard_batch_equivalence with all 589 seeds had executed 64 of them when its
-# 400 s ran out. Every daily run would have been green while the four Orchard
-# targets fuzzed nothing. The permanent corpus grows from these seeds instead;
+# across targets (3600 s / 9 = 400 s each in the daily run), and libFuzzer
+# executes the starting corpus before it mutates anything; a budget that runs
+# out during that pass ends the run there. An Orchard seed costs seconds, not
+# milliseconds -- each drives real proof verification. Measured under OSS-Fuzz's
+# base-runner on 2026-09-22, on a shared machine, with -max_total_time=400:
+# orchard_batch_equivalence stopped 129 inputs into its 589 seeds, at 444 s, and
+# reported INITED and DONE at the same count -- not one mutated input. Every
+# daily run would have been green while the four Orchard targets fuzzed nothing. The permanent corpus grows from these seeds instead;
 # more seeds should come back only after `cargo fuzz cmin` has cut them down.
 SEED_ROOT="$WORK/seed-corpus"
 rm -rf "$SEED_ROOT"

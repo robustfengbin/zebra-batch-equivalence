@@ -33,7 +33,7 @@ jobs:
     # ordering rule in the export runbook (the secret lands before the code)
     # stays correct; this job is what makes a violation of it visible instead
     # of merely disciplined.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       permanent: ${{ steps.decide.outputs.permanent }}
     steps:
@@ -53,7 +53,7 @@ jobs:
 
   PR:
     needs: corpus-store
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     concurrency:
       group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
       cancel-in-progress: true

@@ -40,7 +40,7 @@ jobs:
     # ordering rule in the export runbook (the secret lands before the code)
     # stays correct; this job is what makes a violation of it visible instead
     # of merely disciplined.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       permanent: ${{ steps.decide.outputs.permanent }}
     steps:
@@ -60,7 +60,7 @@ jobs:
 
   Fuzzing:
     needs: corpus-store
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -81,10 +81,11 @@ jobs:
           # Every fuzz target shares this budget, evenly (ClusterFuzzLite's
           # run_fuzzers.py divides fuzz-seconds by the number of targets): nine
           # targets, 800 s each. An Orchard input drives real proof verification
-          # on both paths and costs seconds, and libFuzzer runs a target's whole
-          # stored corpus before its own clock starts, so this budget is also the
-          # ceiling on how large an Orchard corpus can grow and still be fuzzed
-          # past. At 3600 s the ceiling was about a hundred entries; the seed
+          # on both paths and costs seconds, and libFuzzer executes a target's
+          # stored corpus before it mutates anything -- a budget that runs out
+          # during that pass ends the run with no mutation at all -- so this
+          # budget is also the ceiling on how large an Orchard corpus can grow and
+          # still be fuzzed past. At 3600 s the ceiling was about a hundred entries; the seed
           # count in .clusterfuzzlite/build.sh is sized against the same wall.
           fuzz-seconds: 7200
           mode: 'batch'
@@ -93,3 +94,34 @@ jobs:
           storage-repo: ${{ needs.corpus-store.outputs.permanent == 'true' && format('https://{0}@github.com/robustfengbin/zebra-batch-equivalence-corpora.git', secrets.PERSONAL_ACCESS_TOKEN) || '' }}
           storage-repo-branch: main
           storage-repo-branch-coverage: gh-pages
+
+  fuzz-health:
+    # Did each target fuzz, or only execute its stored corpus? A target whose
+    # share of the run ends before libFuzzer finishes the corpus is logged as
+    # "finished with no crashes discovered" -- the same line as a target that
+    # fuzzed and found nothing -- so this reads the Fuzzing job's log and says
+    # which one each target was. It warns rather than fails, like corpus-store.
+    needs: Fuzzing
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/cflite-health.py
+          sparse-checkout-cone-mode: false
+      - name: Did every target get past its corpus
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions"
+          job=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$api/runs/${GITHUB_RUN_ID}/jobs" \
+                | python3 -c 'import json,sys; print(next(j["id"] for j in json.load(sys.stdin)["jobs"] if j["name"].startswith("Fuzzing")))')
+          # A job's log can lag its completion by a few seconds.
+          for attempt in 1 2 3 4 5; do
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$api/jobs/$job/logs" -o fuzzing.log && break
+            sleep 15
+          done
+          python3 scripts/cflite-health.py fuzzing.log
