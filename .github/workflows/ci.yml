@@ -52,7 +52,9 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      # grant AC1: the harness builds and runs in CI. Build all four targets.
+      # grant AC1: the harness builds and runs in CI. `cargo fuzz build` builds
+      # every [[bin]] in fuzz/Cargo.toml, so this step cannot fall behind the
+      # crate — unlike the smoke-run list below, which did.
       - name: Build all fuzz targets
         run: cargo +nightly fuzz build
 
@@ -74,13 +76,42 @@ jobs:
       - name: Seed corpora from real proofs
         run: ./scripts/prep-fuzz-corpus.sh
 
-      - name: Smoke run all four targets (seeded, bounded, must not crash)
+      # `-timeout=25` is not a local choice: it is what OSS-Fuzz's and
+      # ClusterFuzzLite's runner passes, and libFuzzer's own default is 1200.
+      # Running the smoke without it left a 48x gap between the limit here and
+      # the limit where these targets actually have to survive — which is how
+      # three multi-second circuit-key cold starts sat inside the first unit of
+      # every run, unnoticed here and reported as a `timeout-<hash>` crash
+      # there, blaming an input that was fine. Matching the flag makes that
+      # class of divergence fail in the cheap place.
+      # 🔴 Every target, enumerated from fuzz/Cargo.toml rather than listed here.
+      #
+      # This step used to name seven targets by hand. The crate had nine:
+      # tower_partition_equivalence and turnstile_order_independence were added
+      # during M3 and never reached this list — and `.clusterfuzzlite/build.sh`
+      # carried the same seven, so neither the smoke run nor the published
+      # artefacts covered them, while the build step above compiled all nine and
+      # reported success. Nothing compared the two counts.
+      #
+      # tests/fuzz_input_reach.rs now checks that Cargo.toml and fuzz_targets/
+      # agree; enumerating here is what keeps this file from being the third
+      # place that can disagree with them.
+      - name: Smoke run every fuzz target (seeded, bounded, must not crash)
         run: |
-          cargo +nightly fuzz run orchard_batch_equivalence -- \
-            -runs=200000 -max_total_time=60 -print_final_stats=1
-          cargo +nightly fuzz run orchard_batch_composition -- \
-            -runs=200000 -max_total_time=60 -print_final_stats=1
-          cargo +nightly fuzz run orchard_era_routing -- \
-            -runs=200000 -max_total_time=90 -print_final_stats=1
-          cargo +nightly fuzz run orchard_single_deep -- \
-            -runs=200000 -max_total_time=90 -print_final_stats=1
+          targets=$(awk '/^\[\[bin\]\]/{b=1;next} b && /^name = /{gsub(/["]/,"",$3); print $3; b=0}' fuzz/Cargo.toml)
+          test -n "$targets" || { echo "no [[bin]] targets in fuzz/Cargo.toml" >&2; exit 1; }
+          echo "smoke-running $(echo "$targets" | wc -l) target(s): $(echo $targets)"
+          for t in $targets; do
+            # 90s for the targets that touch more than one era's verifying key:
+            # the lazy cold build is ~75s and libFuzzer finishes the in-flight
+            # unit before stopping, so a 60s budget there measures the key build
+            # and almost nothing else.
+            case "$t" in
+              orchard_era_routing|orchard_single_deep|tower_partition_equivalence) budget=90 ;;
+              *) budget=60 ;;
+            esac
+            echo "::group::$t (${budget}s)"
+            cargo +nightly fuzz run "$t" -- \
+              -runs=200000 -max_total_time="$budget" -timeout=25 -print_final_stats=1
+            echo "::endgroup::"
+          done

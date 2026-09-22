@@ -9,6 +9,14 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+# The tower target drives the real batching middleware, which is async: it needs
+# a runtime to spawn the batch worker onto and `join_all` to hold every item's
+# verdict future while the scheduler decides who shares a batch. Pinned to what
+# the parent crate already resolves so the fuzz workspace cannot drift into a
+# second version of the runtime the middleware was built against.
+tokio = { version = "=1.52.3", features = ["rt-multi-thread", "sync", "time"] }
+futures = "=0.3.32"
+tower = "=0.4.13"
 
 [dependencies.zebra-batch-equivalence]
 path = ".."
@@ -44,6 +52,48 @@ bench = false
 [[bin]]
 name = "orchard_single_deep"
 path = "fuzz_targets/orchard_single_deep.rs"
+test = false
+doc = false
+bench = false
+
+# --- M3: the three M2 surfaces, under evolved input -----------------------
+#
+# M2 put Sapling, Sprout and RedJubjub under the equivalence oracle with a
+# designed corpus. These are the same verifiers driven by a coverage-guided
+# fuzzer instead, which is the M3 half: "evolved input against the M2
+# surfaces", where the acceptance criterion is continuous CI.
+
+[[bin]]
+name = "sapling_batch_equivalence"
+path = "fuzz_targets/sapling_batch_equivalence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sprout_batch_equivalence"
+path = "fuzz_targets/sprout_batch_equivalence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "redjubjub_batch_equivalence"
+path = "fuzz_targets/redjubjub_batch_equivalence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "turnstile_order_independence"
+path = "fuzz_targets/turnstile_order_independence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tower_partition_equivalence"
+path = "fuzz_targets/tower_partition_equivalence.rs"
 test = false
 doc = false
 bench = false

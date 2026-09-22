@@ -56,6 +56,25 @@
 //!
 //! No modifications to Zebra consensus/verification source: everything here
 //! drives existing verifiers through public APIs.
+//!
+//! ## How upstream is cited throughout this crate
+//!
+//! Doc comments here cite Zebra by short path and line number
+//! (`sapling.rs:107-114`, `worker.rs:204`). **Every such reference is relative to
+//! the pinned base revision `f5c5277` (Zebra v6.3.0)** — the revision
+//! `Cargo.toml` builds against — and not to upstream `main`, which moves daily.
+//!
+//! This is stated once here rather than repeated at each site because the
+//! failure mode is silent: a line number that has drifted still points at a real
+//! line of a real file, and a reader following it to `main` gets plausible
+//! wrong code with no indication anything is off. Upstream `#10461` (merged
+//! 2026-08-22, not in any release as of 2026-08-28) rewrote
+//! `zebra-consensus/src/primitives/groth16.rs` in exactly this way; the citations
+//! in [`mod@sprout`] carry the revision inline for that reason.
+//!
+//! Citations that already name a vendored crate version
+//! (`sapling-crypto-0.7.0/src/verifier/batch.rs:22`) are pinned by that version
+//! and are unaffected.
 
 use std::io::Cursor;
 use std::panic;
@@ -74,11 +93,13 @@ use zebra_chain::transparent;
 
 pub mod adversarial;
 pub mod era;
+pub mod fuzz_input;
 pub mod invariants;
 pub mod redjubjub;
 pub mod sapling;
 pub mod sprout;
 pub mod tower;
+pub mod turnstile;
 pub mod verifier;
 
 // Re-exports so downstream crates depend only on this crate and cannot
@@ -430,6 +451,28 @@ pub fn item_from_tx_with_nu(tx: &Transaction, nu: NetworkUpgrade) -> Option<Orch
 /// is unchanged (it bounds batch size); a two-bundle transaction straddling the
 /// cap is truncated to its first bundle.
 pub fn items_from_tx_stream(data: &[u8]) -> Vec<OrchardItem> {
+    items_from_tx_stream_with(data, items_from_tx)
+}
+
+/// The transaction-stream input model itself, with the per-pool extraction left
+/// to the caller.
+///
+/// Every pool's fuzz target consumes the same shape — concatenated transaction
+/// wire bytes — and differs only in what it pulls out of each transaction. That
+/// makes the *parsing* rules shared, and they are the part with teeth: stop at
+/// the first undeserializable transaction rather than trying to resynchronise
+/// (a fuzzer would otherwise spend its budget on offsets, not on verifiers);
+/// extract under `catch_unwind`, because sighasher construction can panic on
+/// input that deserialized but is not a coherent transaction, and one such
+/// transaction should cost its own item rather than the whole batch; and stop
+/// at [`MAX_BATCH_ITEMS`] so batch size stays bounded whatever the input says.
+///
+/// Written once here rather than per target: four copies of these rules is how
+/// three of them keep a subtlety the fourth quietly loses.
+pub fn items_from_tx_stream_with<T>(
+    data: &[u8],
+    extract: impl Fn(&Transaction) -> Vec<T>,
+) -> Vec<T> {
     let mut cursor = Cursor::new(data);
     let mut items = Vec::new();
 
@@ -438,7 +481,7 @@ pub fn items_from_tx_stream(data: &[u8]) -> Vec<OrchardItem> {
             Ok(tx) => tx,
             Err(_) => break,
         };
-        let extracted = panic::catch_unwind(panic::AssertUnwindSafe(|| items_from_tx(&tx)));
+        let extracted = panic::catch_unwind(panic::AssertUnwindSafe(|| extract(&tx)));
         if let Ok(tx_items) = extracted {
             for item in tx_items {
                 if items.len() == MAX_BATCH_ITEMS {
@@ -451,6 +494,28 @@ pub fn items_from_tx_stream(data: &[u8]) -> Vec<OrchardItem> {
 
     items
 }
+
+/// Filename of the per-corpus seed-reach manifest.
+///
+/// Named in one place because three things must agree on it: the generator
+/// (`examples/seed_reach_manifest.rs`), the seeding script
+/// (`scripts/prep-fuzz-corpus.sh`), and the test that re-measures it
+/// (`tests/fuzz_input_reach.rs`). A string literal in three files is how two of
+/// them keep pointing at a file the third stopped writing.
+pub const MANIFEST_NAME: &str = "REACHES.txt";
+
+/// The comment block every manifest opens with.
+pub const MANIFEST_HEADER: &str = "\
+# Which files in this corpus reach which extractor, and with how many items.
+#
+# Generated: cargo run --release --example seed_reach_manifest
+# Consumed:  scripts/prep-fuzz-corpus.sh, to pick seeds by whether they reach a
+#            verifier rather than by filename order.
+# Checked:   tests/fuzz_input_reach.rs re-measures this and fails if it is stale.
+#
+# Files reaching no extractor are omitted, so `files scanned` and `files listed`
+# differ; both are stated because their difference is the thing worth seeing.
+";
 
 /// Derive a deterministic RNG seed from the fuzz input, so mutating the input
 /// also explores the RNG space while keeping each input reproducible. FNV-1a.

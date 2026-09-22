@@ -15,66 +15,9 @@
 
 mod common;
 
-use orchard::bundle::Authorized;
-use orchard::circuit::Proof;
-use orchard::primitives::redpallas::{Binding, Signature};
-use zebra_batch_equivalence::{
-    check_equivalence_refs, pre_nu6_2_key, EquivReport, OrchardItem, SigHash,
-};
+use zebra_batch_equivalence::{check_equivalence_refs, pre_nu6_2_key, EquivReport, OrchardItem};
 
-/// Clone `item` with its proof bytes passed through `mutate` (signatures untouched).
-fn with_mutated_proof(item: &OrchardItem, mutate: impl FnOnce(&mut Vec<u8>)) -> OrchardItem {
-    let bundle = item.bundle.clone().map_authorization(
-        &mut (),
-        |_, _, spend_auth| spend_auth,
-        |_, auth: Authorized| {
-            let mut bytes = auth.proof().as_ref().to_vec();
-            mutate(&mut bytes);
-            Authorized::from_parts(Proof::new(bytes), auth.binding_signature().clone())
-        },
-    );
-    OrchardItem {
-        bundle,
-        sighash: SigHash(item.sighash.0),
-        pool: item.pool,
-    }
-}
-
-/// Clone `item` with one bit of its binding signature flipped (proof and sighash
-/// untouched: the signature *body* is damaged, unlike the sighash mutant where a
-/// well-formed signature is checked against the wrong message). Byte-level damage
-/// only — systematic scalar/point perturbation generators are M2's deliverable.
-fn with_mutated_binding_sig(item: &OrchardItem) -> OrchardItem {
-    let bundle = item.bundle.clone().map_authorization(
-        &mut (),
-        |_, _, spend_auth| spend_auth,
-        |_, auth: Authorized| {
-            let mut bytes: [u8; 64] = auth.binding_signature().into();
-            bytes[0] ^= 0x01;
-            Authorized::from_parts(
-                Proof::new(auth.proof().as_ref().to_vec()),
-                Signature::<Binding>::from(bytes),
-            )
-        },
-    );
-    OrchardItem {
-        bundle,
-        sighash: SigHash(item.sighash.0),
-        pool: item.pool,
-    }
-}
-
-/// Clone `item` with one bit of its sighash flipped (bundle untouched: the binding
-/// signature no longer matches the sighash handed to the validator).
-fn with_mutated_sighash(item: &OrchardItem) -> OrchardItem {
-    let mut sighash = item.sighash.0;
-    sighash[0] ^= 0x01;
-    OrchardItem {
-        bundle: item.bundle.clone(),
-        sighash: SigHash(sighash),
-        pool: item.pool,
-    }
-}
+use common::{with_mutated_binding_sig, with_mutated_proof, with_mutated_sighash};
 
 /// Every mutant of every real in-tree proof is rejected by BOTH paths — proof-body bit
 /// flip (SNARK aggregate must fail), proof truncation (proof must not even parse),

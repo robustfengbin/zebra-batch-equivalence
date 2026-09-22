@@ -1,0 +1,29 @@
+# The build context for .clusterfuzzlite/Dockerfile.
+#
+# Without this file the context is the whole working tree — 45 GB of it, almost
+# all `target/` — and `docker build` spends minutes streaming compiler output
+# into a container that then rebuilds everything from source anyway.
+#
+# Everything excluded here is either regenerated inside the container or is not
+# read by build.sh. `seeds-real/` is deliberately NOT excluded: build.sh packs
+# it into the per-target seed corpora.
+
+# Build artefacts, regenerated in the container.
+target/
+fuzz/target/
+fuzz/coverage/
+
+# Runtime fuzzing state. The corpus that matters lives in the corpus
+# repository; `fuzz/corpus/` is the local evolving copy, and shipping it would
+# make container builds depend on whatever the last local run happened to find.
+fuzz/corpus/
+fuzz/artifacts/
+
+# Git history. build.sh reads the working tree, not the log; cargo fetches its
+# own git dependencies by revision regardless of what is here.
+.git/
+.github/
+
+# Documentation and reports: nothing in the build reads them.
+docs/
+reports/

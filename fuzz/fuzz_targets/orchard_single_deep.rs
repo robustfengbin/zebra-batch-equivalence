@@ -31,7 +31,13 @@ use zebra_batch_equivalence::{
     check_equivalence_refs, derive_seed, items_from_tx_stream, CircuitEra, EquivReport, OrchardItem,
 };
 
-fuzz_target!(|data: &[u8]| {
+fuzz_target!(init: {
+    // Before libFuzzer's per-input clock starts. See
+    // `zebra_batch_equivalence::era::warm_verifying_keys` for why: without it the
+    // first unit of every run pays three multi-second circuit key builds and is
+    // reported as a `-timeout=25` crash, blaming an input that is fine.
+    zebra_batch_equivalence::era::warm_verifying_keys();
+}, |data: &[u8]| {
     // `items_from_tx_stream` performs the layered extraction (deserialize →
     // V5+/Orchard filter → sighash → bundle) under catch_unwind per tx.
     let items = items_from_tx_stream(data);

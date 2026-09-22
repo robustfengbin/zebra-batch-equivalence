@@ -23,3 +23,6 @@ scratch/
 # editor / OS
 .DS_Store
 *.swp
+
+# Local credentials; never committed.
+.env

@@ -135,7 +135,16 @@ pub trait BatchVerifier {
 }
 
 /// The four-way classification of a `(batch, single)` result pair. Pool-independent.
-pub(crate) fn classify(batch_ok: bool, single_all: bool) -> EquivReport {
+///
+/// Public because the tower-layer fuzz target reaches the same question from
+/// outside this module — it drives the batch through the real middleware rather
+/// than through [`BatchVerifier::validate_batch`], so it cannot use the checks
+/// below, but the *meaning* of a `(batch, single)` pair must not be restated
+/// there. The direction is the whole content of the judgement and it is easy to
+/// write backwards: batch-accepts-what-single-rejects is the soundness failure,
+/// while batch-rejects-what-single-accepts is what a shared verdict means and is
+/// not a finding. A second copy of this match is a second chance to swap them.
+pub fn classify(batch_ok: bool, single_all: bool) -> EquivReport {
     match (batch_ok, single_all) {
         (true, true) => EquivReport::Agree(true),
         (false, false) => EquivReport::Agree(false),

@@ -1,0 +1,87 @@
+# ClusterFuzzLite: fuzz the code a pull request changes, before it merges.
+#
+# This is the fast half of the M3 CI deliverable. It builds the fuzzers against
+# the PR and fuzzes for a bounded time, seeded from the corpus the scheduled
+# runs have accumulated — so a regression the PR introduces is hunted with
+# inputs the project already knows are interesting, rather than from a cold
+# start that would spend its whole budget rediscovering the input format.
+#
+# A crash fails the check and uploads the reproducer as a run artifact.
+name: ClusterFuzzLite PR fuzzing
+
+on:
+  pull_request:
+
+permissions: read-all
+
+jobs:
+  corpus-store:
+    # Decides whether this run has a permanent corpus to write to, and says so
+    # out loud when it does not.
+    #
+    # An unset secret is substituted as the empty string, so the URL built from
+    # it becomes `https://@github.com/...` and every scheduled run fails on the
+    # push. The first thing a reviewer sees on this repository would then be a
+    # red cross that has nothing to do with the code. The opposite default is
+    # worse in a different way: quietly dropping the storage repository turns
+    # the run green while the corpus it accumulates lives in the Actions cache,
+    # which evicts after seven days without access -- and "permanent regression
+    # corpus" is the acceptance criterion these workflows exist to satisfy.
+    #
+    # So: degrade, but never silently. Fuzzing still runs, the check stays
+    # green, and the run states which of the two modes produced it. The
+    # ordering rule in the export runbook (the secret lands before the code)
+    # stays correct; this job is what makes a violation of it visible instead
+    # of merely disciplined.
+    runs-on: ubuntu-latest
+    outputs:
+      permanent: ${{ steps.decide.outputs.permanent }}
+    steps:
+      - name: Is there a storage repository to write to
+        id: decide
+        env:
+          CORPUS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          if [ -n "$CORPUS_TOKEN" ]; then
+            echo "permanent=true" >> "$GITHUB_OUTPUT"
+            echo "Corpus store: **permanent** (storage repository)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "permanent=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Corpus is not permanent::PERSONAL_ACCESS_TOKEN is unset, so this run has no storage repository. ClusterFuzzLite falls back to the Actions cache, which evicts after seven days without access. Fuzzing still runs, but the corpus it accumulates is ephemeral and this run does not satisfy the permanent-corpus criterion."
+            echo "Corpus store: **ephemeral** (Actions cache, seven-day eviction) -- \`PERSONAL_ACCESS_TOKEN\` is unset." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  PR:
+    needs: corpus-store
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address]
+    steps:
+      - name: Build fuzzers (${{ matrix.sanitizer }})
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: rust
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: ${{ matrix.sanitizer }}
+
+      - name: Run fuzzers (${{ matrix.sanitizer }})
+        id: run
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Ten minutes. Long enough to reach past the seeds on a changed
+          # verification path, short enough that it does not become the reason
+          # a pull request waits.
+          fuzz-seconds: 600
+          mode: 'code-change'
+          sanitizer: ${{ matrix.sanitizer }}
+          output-sarif: false
+          storage-repo: ${{ needs.corpus-store.outputs.permanent == 'true' && format('https://{0}@github.com/robustfengbin/zebra-batch-equivalence-corpora.git', secrets.PERSONAL_ACCESS_TOKEN) || '' }}
+          storage-repo-branch: main
+          storage-repo-branch-coverage: gh-pages

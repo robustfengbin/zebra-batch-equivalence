@@ -35,8 +35,19 @@
 //! `zebra-state` and therefore rocksdb — so two pieces of it are reproduced here
 //! from `groth16.rs`:
 //!
-//! * the JoinSplit public-input encoding (`Item::from_joinsplit`, `:132-190`),
+//! * the JoinSplit public-input encoding (`Item::from_joinsplit`, `:150-190`),
 //! * the `h_sig` hash (`:112-131`), computed with the same crate and version.
+//!
+//! Both line ranges are in `zebra-consensus/src/primitives/groth16.rs` **at the
+//! pinned base revision `f5c5277` (v6.3.0)**, which is what this crate builds
+//! against. They are stated with the revision because upstream has since
+//! rewritten that file: on `main`, `Item::from_joinsplit` is gone, replaced by a
+//! free function `joinsplit_to_item` taking a `zcash_primitives` `JsDescription`
+//! rather than Zebra's own `sprout::JoinSplit`, and `h_sig` now takes four bare
+//! `[u8; 32]`. The encoding those functions compute is byte-for-byte the same, so
+//! what is reproduced below is still what production computes — but a reader who
+//! follows a bare line number to `main` lands in rewritten code, and a bare
+//! symbol name does not resolve there at all.
 //!
 //! Reproduction is exactly the hazard this project keeps warning about: if the
 //! encoding were wrong, **both** paths would receive the same wrong public inputs
@@ -179,7 +190,9 @@ pub fn h_sig(
 }
 
 /// Build the verification item for one JoinSplit, encoding its primary inputs
-/// exactly as `Item::from_joinsplit` does (`groth16.rs:150-190`).
+/// exactly as `Item::from_joinsplit` does (`groth16.rs:150-190` at the pinned
+/// base `f5c5277`; upstream `main` has since renamed it `joinsplit_to_item` and
+/// changed its input type — see this module's header).
 ///
 /// `None` if the proof bytes do not decode — the same fail-closed outcome
 /// production reaches there, by way of `TransactionError::MalformedGroth16`.

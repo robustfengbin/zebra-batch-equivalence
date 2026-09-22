@@ -103,6 +103,32 @@ impl CircuitEra {
     }
 }
 
+/// Build every era's verifying key now, so no later caller pays the cold start.
+///
+/// [`CircuitEra::key`] builds on first use, which is the right default for a
+/// test binary: it costs nothing for the eras a run never touches. Under a
+/// fuzzer it is the wrong default, and the reason is not performance.
+///
+/// libFuzzer times each input against `-timeout` and reports an input that
+/// exceeds it as a crash. OSS-Fuzz and ClusterFuzzLite pass `-timeout=25`.
+/// Three cold key builds cost more than that, and they land inside whichever
+/// input happens to be first — so the very first unit of every run is reported
+/// as a timeout, with a reproducer artifact naming an input that is in fact
+/// fine. The corpus is blamed for the cost of process startup.
+///
+/// libFuzzer's `LLVMFuzzerInitialize` hook runs before that clock starts, which
+/// is where this belongs. `fuzz_target!(init: ...)` is how libfuzzer-sys
+/// exposes it.
+///
+/// Measured 2026-08-28 in the OSS-Fuzz base-runner image: without this, the
+/// first unit of `orchard_batch_equivalence` hits `ERROR: libFuzzer: timeout
+/// after 25 seconds` with the stack inside `VerifyingKey::build`'s rayon join.
+pub fn warm_verifying_keys() {
+    for era in CircuitEra::ALL {
+        let _ = era.key();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

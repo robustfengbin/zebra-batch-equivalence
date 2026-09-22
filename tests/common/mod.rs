@@ -239,3 +239,114 @@ pub fn seeds_real_corpus(dir_name: &str) -> Vec<OrchardItem> {
     }
     items
 }
+
+/// Every item from every transaction under `seeds-real/<dir_name>`, **both
+/// pools**.
+///
+/// The difference from [`seeds_real_corpus`] is the loader: that one calls
+/// `item_from_tx`, which returns at most one item per transaction, so on a
+/// corpus of v6 dual-pool transactions it keeps the Orchard bundle and silently
+/// drops the Ironwood one. Every equivalence assertion downstream still passes —
+/// on half the material, with nothing to indicate it.
+///
+/// `tests/nu6_3_agreement.rs` carries a test named for this exact trap. Use this
+/// loader for any corpus that can carry Ironwood, and assert the pool counts
+/// afterwards rather than trusting the choice of loader.
+#[allow(dead_code)]
+pub fn seeds_real_corpus_all_pools(dir_name: &str) -> Vec<OrchardItem> {
+    let dir = format!("{}/seeds-real/{dir_name}", env!("CARGO_MANIFEST_DIR"));
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("seed corpus dir {dir}: {e}"))
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "bin"))
+        .collect();
+    files.sort();
+
+    let mut items = Vec::new();
+    for path in &files {
+        let bytes = std::fs::read(path).expect("read corpus file");
+        let tx = Transaction::zcash_deserialize(&bytes[..]).unwrap_or_else(|e| {
+            panic!("corpus file {} failed to deserialize: {e}", path.display())
+        });
+        if !tx.inputs().is_empty() {
+            continue;
+        }
+        items.extend(zebra_batch_equivalence::items_from_tx(&tx));
+    }
+    items
+}
+
+
+// ---------------------------------------------------------------------------
+// Item damage, shared rather than duplicated.
+//
+// These moved out of `tests/mutation_smoke.rs` when the cross-pool adversarial
+// suite needed the same three mutations. Two copies of "how to damage a bundle"
+// is how one of them keeps a subtlety the other loses -- the sighash mutant in
+// particular is deliberately *not* the same thing as the binding-signature
+// mutant (one damages the message, the other the signature over it), and that
+// distinction survives only while there is one definition of each.
+// ---------------------------------------------------------------------------
+
+use orchard::bundle::Authorized;
+use orchard::circuit::Proof;
+use orchard::primitives::redpallas::{Binding, Signature};
+use zebra_batch_equivalence::SigHash;
+
+#[allow(dead_code)] // not every test binary that compiles `common` damages items
+/// Clone `item` with its proof bytes passed through `mutate` (signatures untouched).
+pub fn with_mutated_proof(item: &OrchardItem, mutate: impl FnOnce(&mut Vec<u8>)) -> OrchardItem {
+    let bundle = item.bundle.clone().map_authorization(
+        &mut (),
+        |_, _, spend_auth| spend_auth,
+        |_, auth: Authorized| {
+            let mut bytes = auth.proof().as_ref().to_vec();
+            mutate(&mut bytes);
+            Authorized::from_parts(Proof::new(bytes), auth.binding_signature().clone())
+        },
+    );
+    OrchardItem {
+        bundle,
+        sighash: SigHash(item.sighash.0),
+        pool: item.pool,
+    }
+}
+
+#[allow(dead_code)] // not every test binary that compiles `common` damages items
+/// Clone `item` with one bit of its binding signature flipped (proof and sighash
+/// untouched: the signature *body* is damaged, unlike the sighash mutant where a
+/// well-formed signature is checked against the wrong message). Byte-level damage
+/// only — systematic scalar/point perturbation generators are M2's deliverable.
+pub fn with_mutated_binding_sig(item: &OrchardItem) -> OrchardItem {
+    let bundle = item.bundle.clone().map_authorization(
+        &mut (),
+        |_, _, spend_auth| spend_auth,
+        |_, auth: Authorized| {
+            let mut bytes: [u8; 64] = auth.binding_signature().into();
+            bytes[0] ^= 0x01;
+            Authorized::from_parts(
+                Proof::new(auth.proof().as_ref().to_vec()),
+                Signature::<Binding>::from(bytes),
+            )
+        },
+    );
+    OrchardItem {
+        bundle,
+        sighash: SigHash(item.sighash.0),
+        pool: item.pool,
+    }
+}
+
+#[allow(dead_code)] // not every test binary that compiles `common` damages items
+/// Clone `item` with one bit of its sighash flipped (bundle untouched: the binding
+/// signature no longer matches the sighash handed to the validator).
+pub fn with_mutated_sighash(item: &OrchardItem) -> OrchardItem {
+    let mut sighash = item.sighash.0;
+    sighash[0] ^= 0x01;
+    OrchardItem {
+        bundle: item.bundle.clone(),
+        sighash: SigHash(sighash),
+        pool: item.pool,
+    }
+}
+

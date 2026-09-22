@@ -1,0 +1,95 @@
+# ClusterFuzzLite: continuous (batch) fuzzing on a schedule.
+#
+# This is the job the M3 acceptance criterion — "CI integration green and
+# self-running" — actually rests on. It is not triggered by anything a person
+# does: it wakes on a timer, fuzzes every target for a bounded period starting
+# from the accumulated corpus, and pushes whatever new inputs it found back to
+# the corpus repository. The corpus therefore grows across runs instead of
+# being rebuilt from the seed archives each time, which is what makes it a
+# *regression* corpus rather than a seed set.
+#
+# Crashes are committed to the corpus repository's crash branch and surface as
+# a failed run here.
+name: ClusterFuzzLite continuous fuzzing
+
+on:
+  schedule:
+    # 04:31 UTC daily. Off the top of the hour, which is when GitHub's
+    # scheduled-run load peaks and scheduled runs are most often delayed.
+    - cron: '31 4 * * *'
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  corpus-store:
+    # Decides whether this run has a permanent corpus to write to, and says so
+    # out loud when it does not.
+    #
+    # An unset secret is substituted as the empty string, so the URL built from
+    # it becomes `https://@github.com/...` and every scheduled run fails on the
+    # push. The first thing a reviewer sees on this repository would then be a
+    # red cross that has nothing to do with the code. The opposite default is
+    # worse in a different way: quietly dropping the storage repository turns
+    # the run green while the corpus it accumulates lives in the Actions cache,
+    # which evicts after seven days without access -- and "permanent regression
+    # corpus" is the acceptance criterion these workflows exist to satisfy.
+    #
+    # So: degrade, but never silently. Fuzzing still runs, the check stays
+    # green, and the run states which of the two modes produced it. The
+    # ordering rule in the export runbook (the secret lands before the code)
+    # stays correct; this job is what makes a violation of it visible instead
+    # of merely disciplined.
+    runs-on: ubuntu-latest
+    outputs:
+      permanent: ${{ steps.decide.outputs.permanent }}
+    steps:
+      - name: Is there a storage repository to write to
+        id: decide
+        env:
+          CORPUS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          if [ -n "$CORPUS_TOKEN" ]; then
+            echo "permanent=true" >> "$GITHUB_OUTPUT"
+            echo "Corpus store: **permanent** (storage repository)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "permanent=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Corpus is not permanent::PERSONAL_ACCESS_TOKEN is unset, so this run has no storage repository. ClusterFuzzLite falls back to the Actions cache, which evicts after seven days without access. Fuzzing still runs, but the corpus it accumulates is ephemeral and this run does not satisfy the permanent-corpus criterion."
+            echo "Corpus store: **ephemeral** (Actions cache, seven-day eviction) -- \`PERSONAL_ACCESS_TOKEN\` is unset." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  Fuzzing:
+    needs: corpus-store
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address]
+    steps:
+      - name: Build fuzzers (${{ matrix.sanitizer }})
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: rust
+          sanitizer: ${{ matrix.sanitizer }}
+
+      - name: Run fuzzers (${{ matrix.sanitizer }})
+        id: run
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Every fuzz target shares this budget, evenly (ClusterFuzzLite's
+          # run_fuzzers.py divides fuzz-seconds by the number of targets): nine
+          # targets, 800 s each. An Orchard input drives real proof verification
+          # on both paths and costs seconds, and libFuzzer runs a target's whole
+          # stored corpus before its own clock starts, so this budget is also the
+          # ceiling on how large an Orchard corpus can grow and still be fuzzed
+          # past. At 3600 s the ceiling was about a hundred entries; the seed
+          # count in .clusterfuzzlite/build.sh is sized against the same wall.
+          fuzz-seconds: 7200
+          mode: 'batch'
+          sanitizer: ${{ matrix.sanitizer }}
+          output-sarif: false
+          storage-repo: ${{ needs.corpus-store.outputs.permanent == 'true' && format('https://{0}@github.com/robustfengbin/zebra-batch-equivalence-corpora.git', secrets.PERSONAL_ACCESS_TOKEN) || '' }}
+          storage-repo-branch: main
+          storage-repo-branch-coverage: gh-pages

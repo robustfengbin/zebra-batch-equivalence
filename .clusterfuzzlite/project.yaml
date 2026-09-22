@@ -1,0 +1,5 @@
+# ClusterFuzzLite project metadata. The workflows also pass `language: rust`
+# to each action; this file is what the documented build integration requires,
+# and what local reproduction with OSS-Fuzz's infra/helper.py reads -- without
+# it helper.py assumes C++.
+language: rust

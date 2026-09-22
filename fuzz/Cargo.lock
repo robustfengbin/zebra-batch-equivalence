@@ -2907,7 +2907,10 @@ dependencies = [
 name = "zebra-batch-equivalence-fuzz"
 version = "0.0.0"
 dependencies = [
+ "futures",
  "libfuzzer-sys",
+ "tokio",
+ "tower",
  "zebra-batch-equivalence",
 ]
 

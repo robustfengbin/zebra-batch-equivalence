@@ -115,11 +115,55 @@ fn era_routing_never_fails_open_on_real_corpus() {
     );
 }
 
-/// The two real node-extracted eras, each as `(seeds-real dir, era)`.
-const REAL_ERAS: [(&str, CircuitEra); 2] = [
+/// Every real node-extracted era, each as `(seeds-real dir, era)`.
+///
+/// This list must cover [`CircuitEra::ALL`]; `real_eras_cover_every_circuit_era`
+/// below fails if it stops doing so. It was short by one era until M3 — the
+/// NU6.3-onward corpus existed and the deep sweep never ran over it, which is
+/// invisible from a green suite because the two-era sweep passes on its own
+/// terms.
+const REAL_ERAS: [(&str, CircuitEra); 3] = [
     ("orchard_v5_pre_nu6_2", CircuitEra::PreNu6_2),
     ("orchard_v5_nu6_2", CircuitEra::Nu6_2),
+    ("nu6_3_activation", CircuitEra::Nu6_3Onward),
 ];
+
+/// The deep sweep must reach every era the crate knows about.
+///
+/// A missing era does not fail anything: the sweep runs over the eras it was
+/// given and reports success for them. The only way it shows up is a check that
+/// compares the two lists.
+#[test]
+fn real_eras_cover_every_circuit_era() {
+    for era in CircuitEra::ALL {
+        assert!(
+            REAL_ERAS.iter().any(|(_, e)| *e == era),
+            "{era:?} has no entry in REAL_ERAS, so the deep invariant sweep never \
+             runs over it. Add its corpus directory, or state here why it has none."
+        );
+    }
+}
+
+/// The NU6.3 corpus must load Ironwood-pool items, not just its Orchard half.
+///
+/// `REAL_ERAS` feeds a loader, and the single-item loader keeps one bundle per
+/// transaction, the Orchard one whenever there are two. On this corpus that
+/// drops the Ironwood half of all 77 dual-pool transactions: 172 of its 249
+/// items reach the sweep, and 29 of them, not 106, are Ironwood.
+#[test]
+fn nu6_3_entry_loads_both_pools() {
+    let items = common::seeds_real_corpus_all_pools("nu6_3_activation");
+    let ironwood = items
+        .iter()
+        .filter(|i| i.pool == zebra_batch_equivalence::Pool::Ironwood)
+        .count();
+    let orchard = items.len() - ironwood;
+    assert!(
+        ironwood > 0 && orchard > 0,
+        "NU6.3 entry loaded {orchard} Orchard / {ironwood} Ironwood items; the deep \
+         sweep over this era is only covering Ironwood if both are non-zero"
+    );
+}
 
 /// W6 PR tier: the full deep sweep over a deterministic [`SAMPLE`]-item window
 /// of each real node-extracted era. Always-green scale (~one narrow window per
@@ -127,7 +171,7 @@ const REAL_ERAS: [(&str, CircuitEra); 2] = [
 #[test]
 fn deep_check_sampled_window_per_real_era() {
     for (dir, era) in REAL_ERAS {
-        let items = common::seeds_real_corpus(dir);
+        let items = common::seeds_real_corpus_all_pools(dir);
         assert!(
             items.len() >= SAMPLE,
             "expected ≥{SAMPLE} usable items under seeds-real/{dir}, got {}",
@@ -153,7 +197,7 @@ fn deep_check_full_real_corpus_folded() {
     let mut windows = 0usize;
     let mut proofs = 0usize;
     for (dir, era) in REAL_ERAS {
-        let items = common::seeds_real_corpus(dir);
+        let items = common::seeds_real_corpus_all_pools(dir);
         assert!(!items.is_empty(), "empty corpus under seeds-real/{dir}");
         for chunk in items.chunks(FOLD) {
             let window: Vec<&OrchardItem> = chunk.iter().collect();

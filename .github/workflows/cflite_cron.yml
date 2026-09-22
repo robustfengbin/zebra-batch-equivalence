@@ -1,0 +1,111 @@
+# ClusterFuzzLite: weekly corpus pruning and coverage reporting.
+#
+# Two maintenance modes that keep the permanent corpus from becoming a pile:
+#
+#   * prune    — drops inputs that no longer contribute coverage the rest of
+#                the corpus does not already reach. Without it the corpus grows
+#                monotonically and every later run pays for redundant inputs.
+#   * coverage — regenerates the HTML coverage report for the fuzz targets and
+#                publishes it to the corpus repository's gh-pages branch, which
+#                is the reviewer-visible artefact for "what has the continuous
+#                run actually exercised".
+#
+# The coverage number here answers a different question from the region-coverage
+# report delivered in M2: that one measures the batch glue layer under the
+# deterministic suite, this one measures what the evolving corpus reaches.
+# They are separate measurements and are not comparable line for line.
+name: ClusterFuzzLite cron tasks
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  corpus-store:
+    # Decides whether this run has a permanent corpus to write to, and says so
+    # out loud when it does not.
+    #
+    # An unset secret is substituted as the empty string, so the URL built from
+    # it becomes `https://@github.com/...` and every scheduled run fails on the
+    # push. The first thing a reviewer sees on this repository would then be a
+    # red cross that has nothing to do with the code. The opposite default is
+    # worse in a different way: quietly dropping the storage repository turns
+    # the run green while the corpus it accumulates lives in the Actions cache,
+    # which evicts after seven days without access -- and "permanent regression
+    # corpus" is the acceptance criterion these workflows exist to satisfy.
+    #
+    # So: degrade, but never silently. Fuzzing still runs, the check stays
+    # green, and the run states which of the two modes produced it. The
+    # ordering rule in the export runbook (the secret lands before the code)
+    # stays correct; this job is what makes a violation of it visible instead
+    # of merely disciplined.
+    runs-on: ubuntu-latest
+    outputs:
+      permanent: ${{ steps.decide.outputs.permanent }}
+    steps:
+      - name: Is there a storage repository to write to
+        id: decide
+        env:
+          CORPUS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          if [ -n "$CORPUS_TOKEN" ]; then
+            echo "permanent=true" >> "$GITHUB_OUTPUT"
+            echo "Corpus store: **permanent** (storage repository)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "permanent=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Corpus is not permanent::PERSONAL_ACCESS_TOKEN is unset, so this run has no storage repository. ClusterFuzzLite falls back to the Actions cache, which evicts after seven days without access. Fuzzing still runs, but the corpus it accumulates is ephemeral and this run does not satisfy the permanent-corpus criterion."
+            echo "Corpus store: **ephemeral** (Actions cache, seven-day eviction) -- \`PERSONAL_ACCESS_TOKEN\` is unset." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  Pruning:
+    needs: corpus-store
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build fuzzers
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: rust
+
+      - name: Run fuzzers
+        id: run
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Split evenly across nine targets like the daily run. Pruning must
+          # execute every stored input once; at 600 s an Orchard target had
+          # about a minute for a corpus the daily run needs minutes to load, so
+          # the prune that bounds the corpus could not finish, and would still
+          # have reported green.
+          fuzz-seconds: 3600
+          mode: 'prune'
+          storage-repo: ${{ needs.corpus-store.outputs.permanent == 'true' && format('https://{0}@github.com/robustfengbin/zebra-batch-equivalence-corpora.git', secrets.PERSONAL_ACCESS_TOKEN) || '' }}
+          storage-repo-branch: main
+          storage-repo-branch-coverage: gh-pages
+
+  Coverage:
+    needs: corpus-store
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build fuzzers
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: rust
+          sanitizer: coverage
+
+      - name: Run fuzzers
+        id: run
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Same walk over the stored corpus as pruning, same budget.
+          fuzz-seconds: 3600
+          mode: 'coverage'
+          sanitizer: coverage
+          storage-repo: ${{ needs.corpus-store.outputs.permanent == 'true' && format('https://{0}@github.com/robustfengbin/zebra-batch-equivalence-corpora.git', secrets.PERSONAL_ACCESS_TOKEN) || '' }}
+          storage-repo-branch: main
+          storage-repo-branch-coverage: gh-pages
