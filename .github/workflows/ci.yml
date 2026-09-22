@@ -22,7 +22,7 @@ jobs:
     # nothing to do with the code, on the dates a reviewer is likeliest to look.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build deps (clang for any FFI/bindgen in the closure)
         run: sudo apt-get update && sudo apt-get install -y clang
@@ -44,7 +44,7 @@ jobs:
     name: Fuzz target build + smoke run
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y clang
