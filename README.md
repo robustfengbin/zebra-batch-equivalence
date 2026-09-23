@@ -7,10 +7,16 @@ the same assertion to **every batch verifier Zebra has** — Sapling Groth16,
 Sprout Groth16, Orchard RedPallas and Sapling RedJubjub — adds an adversarial
 corpus generator, and drives Zebra's own batching middleware
 (`tower-batch-control`) rather than only batches this harness groups itself.
+Milestone 3 extends it to the **Ironwood** pool (NU6.3), adds a soundness target
+for the Orchard → Ironwood **turnstile**, and runs the whole suite as daily
+**ClusterFuzzLite** fuzzing with a permanent corpus.
 
-The milestone report — deliverables mapped to the grant text, the coverage
-measurements and the attribution matrix — is
-[`reports/m2-delivery.md`](reports/m2-delivery.md).
+The final report — what the suite covers, what it found across all three
+milestones, and what it does not establish — is
+[`reports/m3-final-security-report.md`](reports/m3-final-security-report.md).
+The earlier milestone reports are [`reports/m2-delivery.md`](reports/m2-delivery.md)
+(coverage measurements and the attribution matrix) and
+[`reports/m1-delivery.md`](reports/m1-delivery.md).
 
 ## The property, and why it is unguarded
 
@@ -24,7 +30,7 @@ failure — the same class that underlies counterfeiting, and the same unguarded
 surface as the June 5, 2026 Orchard incident (a circuit under-constraint that
 survived audits for years, fixed in the NU6.2 hard fork).
 
-The existing coverage-guided fuzz harness only checks for panics — it explicitly
+The existing coverage-guided harness (ZCG #234's) only checks for panics — it explicitly
 does *not* assert `verify == Ok`. This project adds the missing assertion,
 seeded from real mainnet data, and runs it continuously in CI.
 
@@ -78,9 +84,19 @@ is modified.**
 | Adversarial generators produce mostly-valid-plus-one-invalid batches | ✅ `src/adversarial.rs` — valid base, single-element tamper, batch composition, with `check_shape` failing loudly when a tamper did not actually invalidate anything |
 | Coverage report delivered | ✅ [`reports/m2-delivery.md`](reports/m2-delivery.md), *Coverage* — the three objects the grant names (`tower-batch-control`, `BatchValidator`, reddsa batch) all measured, with a per-suite attribution matrix |
 
-Two limits the report states and this file repeats rather than leaves to be
-discovered: the four surfaces M2 added have **deterministic-test coverage only**
-(all four fuzz targets are Orchard), and **Zebra does not batch-verify Sprout
+**Milestone 3 (Ironwood + turnstile + continuous CI + final report)** — [`reports/m3-final-security-report.md`](reports/m3-final-security-report.md)
+
+| Acceptance criterion | Status |
+| --- | --- |
+| Ironwood verifier covered by the oracle | ✅ on all five surfaces: base equivalence (`tests/nu6_3_agreement.rs`, incl. mixed Orchard/Ironwood batches), deep invariants, adversarial (`tests/cross_pool_adversarial.rs`), turnstile, and fuzz |
+| Turnstile soundness target runs against testnet/activated code | ✅ against real **mainnet** post-activation transactions (`seeds-real/nu6_3_activation`, 172 transactions); conservation and no double-migration on that corpus, no forged residual value on constructed runs (`src/turnstile.rs`, `tests/turnstile_soundness.rs`, fuzz target `turnstile_order_independence`) |
+| CI integration green and self-running | ✅ ClusterFuzzLite runs every target daily on a schedule, from a permanent corpus in [`zebra-batch-equivalence-corpora`](https://github.com/robustfengbin/zebra-batch-equivalence-corpora); a `fuzz-health` job reports per target whether it fuzzed or only replayed its corpus |
+| Final report delivered | ✅ [`reports/m3-final-security-report.md`](reports/m3-final-security-report.md) |
+
+Two limits the reports state and this file repeats rather than leaves to be
+discovered: **no disagreement found is not equivalence proven** — the suite is
+empirical assurance under permanent assertion, not a formal proof — and **Zebra
+does not batch-verify Sprout
 today, and has no active plan to** — `JOINSPLIT_VERIFIER` is a per-item service,
 and the issue proposing batch support,
 [#3127](https://github.com/ZcashFoundation/zebra/issues/3127), was closed as *not
@@ -96,24 +112,29 @@ src/sapling.rs        Sapling Groth16 — spend and output sub-batches
 src/sprout.rs         Sprout JoinSplit Groth16
 src/redjubjub.rs      Sapling RedJubjub, split out so a signature verdict is attributable
 src/tower.rs          drives tower-batch-control: batch boundaries set by the scheduler
+src/turnstile.rs      the Orchard → Ironwood turnstile: conservation, double migration, residual value
+src/fuzz_input.rs     turns fuzzer bytes into transactions and items, shared by the targets
 src/adversarial.rs    adversarial corpus generator + tamper-discriminability checks
 src/era.rs            three circuit eras, cached keys, production routing
 src/invariants.rs     deep batching invariants + classification
 src/bin/              corpus extraction from block dumps (Orchard, and historical Groth16)
-fuzz/                 four cargo-fuzz targets, all Orchard
-tests/                15 integration suites, one per question (attributed in reports/m2-delivery.md)
+fuzz/                 nine cargo-fuzz targets; fuzz/regressions/ keeps every crash found
+tests/                18 integration suites, one per question
+.clusterfuzzlite/     ClusterFuzzLite build: Dockerfile, build.sh, seed packing
+.github/workflows/    CI, and the ClusterFuzzLite daily / weekly / PR workflows
 examples/             seed dumping, pool surveys, batch-vs-single speedup measurement
 scripts/coverage.sh   the three coverage columns; coverage-attribution.sh the per-suite matrix
+scripts/prep-fuzz-corpus.sh   fuzz seeds, chosen by what reaches each verifier (REACHES.txt)
+scripts/cflite-health.py      per-target "did it fuzz" check on the daily run's log
 seeds-real/           real mainnet corpora: Orchard eras, NU6.3 activation window, historical Groth16
-reports/              m2-delivery.md — the milestone report; m1-delivery.md — M1's
+reports/              m3-final-security-report.md — the final report; m2-, m1-delivery.md
 ```
 
 ## Fuzz targets
 
-Four Orchard batch-path targets, each stressing a different facet — all assert
-soundness, not just panic-freedom. **They are Orchard-only**: M2's adversarial
-input for the other verifiers is designed rather than evolved, which the coverage
-report states as a limitation rather than a reading note.
+Nine targets, all asserting soundness, not just panic-freedom. Four stress the
+Orchard batch path — which also carries Ironwood, since the two pools share the
+Action and halo2 machinery:
 
 - **`orchard_batch_equivalence`** — the full batch under every invariant (base
   equivalence, order-independence, duplicate-consistency, era-routing).
@@ -124,6 +145,30 @@ report states as a limitation rather than a reading note.
 - **`orchard_single_deep`** — single-bundle granularity × era keys, with the
   layered extraction depth of ZCG#234's `orchard_bundle_verify` plus the
   soundness assertions it lacked.
+
+Four cover the other verifiers and the batching layer:
+
+- **`sapling_batch_equivalence`**, **`redjubjub_batch_equivalence`**,
+  **`sprout_batch_equivalence`** — batch against single for Sapling Groth16,
+  Sapling RedJubjub and Sprout Groth16.
+- **`tower_partition_equivalence`** — the same items under different batch
+  partitions in `tower-batch-control`: no partition may turn a rejected item into
+  an accepted one, and where every item is valid, no partition may reject.
+
+And one checks a different property:
+
+- **`turnstile_order_independence`** — the turnstile has no second path to compare
+  against, so this target checks every double-spend report against a reference
+  model, under several arrival orders.
+
+**Continuous fuzzing.** ClusterFuzzLite runs all nine every day: it prunes the
+permanent corpus, fuzzes each target for an equal share of three hours, and then
+checks the log to report, per target, whether it got past its stored corpus into new
+inputs. New inputs go to
+[`zebra-batch-equivalence-corpora`](https://github.com/robustfengbin/zebra-batch-equivalence-corpora),
+so each run starts from what the previous ones found. A weekly job publishes a
+coverage report from that corpus. Scheduled runs on GitHub are best-effort, and on
+this repository they start hours after their set time.
 
 ## Building & running
 
@@ -136,9 +181,9 @@ build, so this repository builds from a single clone with no local Zebra checkou
 # The full suite: all four verifiers, real mainnet corpora, adversarial batches
 cargo test
 
-# Fuzz target
-cargo +nightly fuzz build orchard_batch_equivalence
-cargo +nightly fuzz run   orchard_batch_equivalence
+# A fuzz target, seeded the way CI seeds it
+./scripts/prep-fuzz-corpus.sh
+cargo +nightly fuzz run orchard_batch_equivalence fuzz/corpus/orchard_batch_equivalence
 
 # Coverage of the Orchard batch path
 cargo +nightly fuzz coverage orchard_batch_equivalence
