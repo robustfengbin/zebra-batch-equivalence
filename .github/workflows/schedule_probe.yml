@@ -1,0 +1,19 @@
+# Temporary: does this repository's schedule trigger fire at all?
+#
+# The daily fuzzing workflow produced no run in its first two slots
+# (2026-09-23 04:31 and 09:43 UTC) -- not failed runs, no runs. This probe
+# fires every ten minutes and does nothing else, so within the hour it shows
+# whether scheduled events reach this repository. Removed once that is known.
+name: Schedule probe
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+
+permissions: read-all
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: date -u
