@@ -16,8 +16,13 @@ never initialised, or whose executions did not exceed what initialising took,
 mutated nothing. It warns rather than fails, like the corpus-store check: the
 run itself is not wrong, but it must not read as coverage it did not do.
 
-Usage: cflite-health.py <job-log-file>   (writes a table to $GITHUB_STEP_SUMMARY
-if set; exits 0 always, prints ::warning:: lines for GitHub Actions)
+It also checks the log against the targets the crate declares. A target that
+never started leaves no lines to judge, so a check that only reads the log
+passes it by saying nothing -- which is why the expected list is an input.
+
+Usage: cflite-health.py <job-log-file> <fuzz/Cargo.toml>   (writes a table to
+$GITHUB_STEP_SUMMARY if set; exits 0 always, prints ::warning:: lines for
+GitHub Actions)
 """
 
 import os
@@ -33,6 +38,22 @@ INITED = re.compile(r"^#(\d+)\s+INITED\b.*?\bcorp: (\d+)/")
 # are `#<n> 0x...`, so the tab and the event name keep them out.
 STATUS = re.compile(r"^#(\d+)\t(?:INITED|NEW|REDUCE|pulse|RELOAD|DONE)\b")
 DONE = re.compile(r"^Done (\d+) runs in (\d+) second")
+BIN_NAME = re.compile(r'^name\s*=\s*"([A-Za-z0-9_]+)"')
+
+
+def declared_targets(cargo_toml):
+    """The `name`s of the `[[bin]]` sections -- the same list build.sh publishes."""
+    names, in_bin = [], False
+    with open(cargo_toml, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("["):
+                in_bin = line == "[[bin]]"
+                continue
+            m = BIN_NAME.match(line)
+            if in_bin and m:
+                names.append(m.group(1))
+    return names
 
 
 def parse(lines):
@@ -84,11 +105,19 @@ def verdict(t):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(__doc__.strip().splitlines()[-3], file=sys.stderr)
+    if len(sys.argv) != 3:
+        print("usage: cflite-health.py <job-log-file> <fuzz/Cargo.toml>", file=sys.stderr)
         return 2
     with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
         order, targets = parse(f)
+    expected = declared_targets(sys.argv[2])
+    if not expected:
+        print("::warning title=Fuzz health unknown::No [[bin]] targets read from "
+              f"{sys.argv[2]}, so the log could not be checked for missing targets.")
+    missing = [n for n in expected if n not in targets]
+    for name in missing:
+        print(f"::warning title={name} did not run::{name} is declared in "
+              f"{sys.argv[2]} but never appears in the fuzzing job's log.")
 
     rows = ["| target | corpus at start | executions | seconds | |", "|---|---:|---:|---:|---|"]
     if not order:
@@ -111,10 +140,16 @@ def main():
         print(f"{name}: corpus={t['corpus']} inited_at={t['inited_at']} "
               f"executions={executions(t)} secs={t['secs']} -> {problem or 'fuzzed'}")
 
+    for name in missing:
+        rows.append(f"| `{name}` | — | — | — | never ran |")
+    fuzzed = sum(1 for n in expected if n in targets and verdict(targets[n]) is None)
+    headline = f"**{fuzzed}/{len(expected)} targets fuzzed**"
+    print(headline.strip("*"))
+
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
-            f.write("### Fuzz health\n\n" + "\n".join(rows) + "\n")
+            f.write("### Fuzz health\n\n" + headline + "\n\n" + "\n".join(rows) + "\n")
     return 0
 
 

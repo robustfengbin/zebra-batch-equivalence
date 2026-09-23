@@ -158,7 +158,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          sparse-checkout: scripts/cflite-health.py
+          sparse-checkout: |
+            scripts/cflite-health.py
+            fuzz/Cargo.toml
           sparse-checkout-cone-mode: false
       - name: Did every target get past its corpus
         env:
@@ -172,4 +174,4 @@ jobs:
             curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$api/jobs/$job/logs" -o fuzzing.log && break
             sleep 15
           done
-          python3 scripts/cflite-health.py fuzzing.log
+          python3 scripts/cflite-health.py fuzzing.log fuzz/Cargo.toml
